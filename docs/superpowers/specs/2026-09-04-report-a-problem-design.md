@@ -1,8 +1,23 @@
 # report-a-problem: portable bug-report module — design spec
 
-Date: 2026-09-04
-Status: approved for implementation (pending spec review)
+Date: 2026-09-04 (revised after round-1 adversarial review)
+Status: revised, pending round-2 review
 Origin: extracted from `experttech` PR #190 (https://github.com/capoyeti/experttech/pull/190)
+and PR #194 (https://github.com/capoyeti/experttech/pull/194 — an attachment-ownership
+security fix found while reviewing this spec; already applied to experttech directly)
+
+## Revision note (round 1)
+
+An adversarial review of the first draft found 6 material gaps: no durable-
+delivery guarantee (the client can be told "we have it" when nothing
+persisted), no stated RLS/access-control requirement on the migrations, no
+ownership check on client-submitted attachment paths (an actual
+vulnerability — fixed in experttech PR #194, and folded into this spec's
+fixed behavior below), the reporter-confirmation email sink missing from the
+interface entirely, a real risk the component ships unstyled (Tailwind's
+content-scanning doesn't reach into `node_modules` by default) with no
+theming story, and the ported Plane helpers reading `process.env` directly
+instead of the injected config. All six are addressed below.
 
 ## Purpose
 
@@ -74,7 +89,7 @@ report-a-problem/
       report-payload.ts
       panel-position.ts
       plane-screenshots.ts
-      plane-triage.ts         # addCommentOnce/setPriority/markIntakeDuplicate
+      plane-client.ts         # createPlaneClient(config) -> addCommentOnce/setPriority/markIntakeDuplicate
       attachment-filename.ts
       needs-screenshot.ts
       dedup-key.ts
@@ -111,9 +126,26 @@ interface ReportProblemPanelProps {
 ```
 
 Peer dependencies: `react`, `react-dom`, `lucide-react`, `html2canvas`.
-Tailwind utility classes ship as-is (every real frontend app surveyed uses
-Tailwind; the few that don't are backend/worker apps with no UI to mount
-this in anyway).
+
+**Styling (revised — round 1 finding):** the original draft assumed shipping
+Tailwind utility class strings in the compiled JSX would just work. It
+wouldn't reliably: Tailwind 3 consumers only scan their own configured
+`content` paths (not `node_modules`), and Tailwind 4's `@source` opt-in has
+the same problem — a compiled package installed as a dependency can render
+completely unstyled by default. Fixing this by asking every consumer to add
+a `@source` entry pointing into `node_modules/@visibleprojects/report-a-problem`
+is fragile and easy to silently drift out of sync across repos.
+
+Instead, the component ships its own **scoped, pre-built CSS file**
+(`dist/style.css`, hand-written — not Tailwind — under a `.rap-*` class
+prefix so it can never collide with a consumer's own classes), which the
+consumer imports once (`import '@visibleprojects/report-a-problem/style.css'`
+in their root layout). Colors are exposed as CSS custom properties with
+neutral defaults (`--rap-accent`, `--rap-bg`, `--rap-surface`, `--rap-text`,
+`--rap-border`, `--rap-warning`), so a consumer with its own brand palette
+(Visible Projects' charcoal/amber/slate/ember, or whatever a given repo
+uses) overrides them in their own global CSS — no Tailwind dependency, no
+build-time coupling to the consumer's Tailwind version, no scanning problem.
 
 ### Handler factories
 
@@ -152,11 +184,27 @@ interface ReportProblemConfig {
   table?: string;   // default 'error_reports'
   bucket?: string;  // default 'error-screenshots'
   sinks: {
-    email?: { recipients: string[]; send: (args: EmailArgs) => Promise<{ success: boolean; error?: unknown }> };
+    // Team/admin notification — the only sink besides the DB row that has a
+    // sane universal default (silently no-ops if omitted, same as today).
+    email?: { recipients: string[]; send: SendEmailFn };
+    // Separate from the above (round-1 finding: this was missing entirely).
+    // Mirrors experttech exactly: fires only for a manual report
+    // (payload.code==='user_report' && context.kind==='manual_report'), to
+    // the REPORTER's own email, with its own reply-to and template. Omitting
+    // this config just means no confirmation copy is sent — never an error.
+    reporterConfirmation?: {
+      replyTo?: string[];
+      render: (args: { name: string; ticketId: string; description: string; route?: string; timestamp: string }) =>
+        { subject: string; html: string };
+      send: SendEmailFn;
+    };
     whatsapp?: { webhookUrl: string };
     plane?: { apiUrl: string; apiKey: string; workspaceSlug: string; projectId: string };
   };
 }
+
+type SendEmailFn = (args: { to: string | string[]; subject: string; html: string; replyTo?: string[] }) =>
+  Promise<{ success: boolean; error?: unknown }>;
 ```
 
 `createAttachmentHandler(config)` takes the same shape (only needs
@@ -165,15 +213,53 @@ interface ReportProblemConfig {
 Every field the current experttech route hardcodes (rate limiting, secret
 scrubbing, same-origin check, size caps, mime allowlist) moves in as fixed
 behavior — those aren't repo-specific, they're just correct, and stay
-non-configurable to keep the interface small.
+non-configurable to keep the interface small. Round 1 added two more
+non-configurable, always-on behaviors to this list — see "Fixed security
+behavior" below.
 
 ### Pure functions
 
 `buildUserReportPayload`, `formatTicket`, `computeDedupKey`,
 `sanitizeAttachmentFilename`, `buildScreenshotCommentHtml`,
-`screenshotCommentMarker`, `clampPanelPosition`, `needsScreenshot`,
-`addCommentOnce` (+ `setPriority`, `markIntakeDuplicate`) — ported with no
-behavior change, still framework-agnostic, still independently unit-tested.
+`screenshotCommentMarker`, `clampPanelPosition`, `needsScreenshot` — ported
+with no behavior change, still framework-agnostic, still independently
+unit-tested.
+
+**Plane helpers — changed, not ported as-is (round 1 finding):**
+experttech's `addCommentOnce`/`setPriority`/`markIntakeDuplicate` read
+`PLANE_API_URL`/`PLANE_API_KEY`/etc. straight from `process.env`. That's
+incompatible with this package's config-injection model — the handler
+factory already receives Plane credentials through `config.sinks.plane`, so
+if these helpers kept reading ambient env vars, issue creation could target
+one Plane project while the attachment comment silently targets a
+different one (or nothing, if those env vars are unset). Instead, the
+package exports `createPlaneClient(config.sinks.plane)` returning
+`{ addCommentOnce, setPriority, markIntakeDuplicate }` bound to that exact
+config — no ambient environment reads anywhere in the package. A contract
+test asserts issue creation and the attachment comment always hit the same
+workspace/project URL.
+
+### Fixed security behavior (non-configurable, round 1 findings)
+
+- **Attachment path ownership.** Every `screenshotPaths` entry must be
+  prefixed with the authenticated caller's own `user.id` (exactly the check
+  just added to experttech in PR #194) before it is ever signed. A path that
+  fails this check is silently dropped from the report, never signed, never
+  embedded — the same "never block the report over one bad attachment"
+  posture already used for a failed upload.
+- **Delivery success contract.** The DB row is not modeled as a "sink" —
+  it's the one required, non-optional persistence step. If the insert into
+  `table` fails, the handler returns `{ ok: false }` (the panel shows a real
+  retry error), rather than experttech's current behavior of returning
+  `{ ok: true }` even when every delivery attempt failed. Email/WhatsApp/Plane
+  stay best-effort on top of that guaranteed write — one of them failing
+  never fails the response, matching today's behavior for those three.
+  Whether the migration has actually been run isn't something the handler
+  can verify at runtime (a missing table just surfaces as the same insert
+  failure as any other DB error) — the README states it as a hard
+  prerequisite: run the migration before wiring the route, and the panel
+  showing a retry error on every submit is the expected symptom of skipping
+  that step, not a mysterious failure.
 
 ## Data model
 
@@ -199,6 +285,22 @@ that later adopts experttech's triage sweep adds those itself at that time.
 
 `error-screenshots` bucket: private, 8MB cap, the same image+document mime
 allowlist shipped in experttech today.
+
+**Access control is normative, not optional (round 1 finding).** The
+original draft listed columns but never stated the security posture —
+reports carry stack traces and technical context, and having a service-role
+client in the handler does NOT itself protect the table from anon/
+authenticated access. The migration templates MUST, and the README states
+this explicitly:
+- Enable RLS on the table.
+- Grant no policies to `anon` or `authenticated` — service role only.
+- The bucket stays private with no public read policy (already the case).
+
+The package's own test suite includes a check (against local Supabase) that
+an anon/authenticated-scoped client gets zero rows/objects back, so a
+consumer copying the migration wrong is at least caught in the package's own
+CI, even though it can't force a consumer's copy-pasted migration to be
+correct.
 
 ## Testing
 
