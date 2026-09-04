@@ -6,18 +6,33 @@ Origin: extracted from `experttech` PR #190 (https://github.com/capoyeti/expertt
 and PR #194 (https://github.com/capoyeti/experttech/pull/194 — an attachment-ownership
 security fix found while reviewing this spec; already applied to experttech directly)
 
-## Revision note (round 1)
+## Revision notes
 
-An adversarial review of the first draft found 6 material gaps: no durable-
-delivery guarantee (the client can be told "we have it" when nothing
-persisted), no stated RLS/access-control requirement on the migrations, no
-ownership check on client-submitted attachment paths (an actual
-vulnerability — fixed in experttech PR #194, and folded into this spec's
-fixed behavior below), the reporter-confirmation email sink missing from the
-interface entirely, a real risk the component ships unstyled (Tailwind's
-content-scanning doesn't reach into `node_modules` by default) with no
-theming story, and the ported Plane helpers reading `process.env` directly
-instead of the injected config. All six are addressed below.
+**Round 1** found 6 material gaps: no durable-delivery guarantee (the client
+can be told "we have it" when nothing persisted), no stated RLS/access-
+control requirement on the migrations, no ownership check on client-
+submitted attachment paths (an actual vulnerability — fixed in experttech
+PR #194, and folded into this spec's fixed behavior below), the reporter-
+confirmation email sink missing from the interface entirely, a real risk
+the component ships unstyled (Tailwind's content-scanning doesn't reach
+into `node_modules` by default) with no theming story, and the ported Plane
+helpers reading `process.env` directly instead of the injected config.
+
+**Round 2**, reviewing that revision, found the fixes were directionally
+right but 3 more material gaps remained: (a) making DB failure return
+`ok:false` gives a client a real reason to retry for the first time, but
+nothing in the design made a retry safe — a retry after a lost response
+(insert succeeded, network dropped before the client saw it) would create a
+second row, second Plane ticket, second email; (b) the promised
+`dist/style.css` had no actual build step producing it — `tsc` only
+compiles `.ts`/`.tsx`, so the file the consumer is told to import would
+simply not exist in the published tarball; (c) the attachment-ownership
+rule was stated in prose loosely enough ("prefixed with the caller's own
+user.id") that a literal implementation could use a bare `startsWith(user.id)`
+— which a sibling id merely starting with the same characters would also
+pass — reopening the exact vulnerability round 1 closed, even though the
+actual experttech fix (PR #194) already does this correctly with a full
+path-segment boundary. All three are addressed below.
 
 ## Purpose
 
@@ -80,6 +95,7 @@ report-a-problem/
   tsconfig.json
   src/
     index.ts            # public exports
+    style.css            # source for the shipped dist/style.css (see Styling)
     component/
       ReportProblemPanel.tsx
     handlers/
@@ -104,8 +120,10 @@ report-a-problem/
   docs/superpowers/specs/2026-09-04-report-a-problem-design.md   # this file
 ```
 
-Build: `tsc` to `dist/` (mirrors `doc-render`'s `"main": "dist/index.js"`,
-`"types": "dist/index.d.ts"` — a plain compiled library, no bundler needed).
+Build: `tsc && cp src/style.css dist/style.css` (mirrors `doc-render`'s
+`"main": "dist/index.js"`, `"types": "dist/index.d.ts"` — a plain compiled
+library, no bundler needed; see "Build artifact" under Styling for why the
+copy step is required, not implied by `tsc` alone).
 
 ## Public interface
 
@@ -137,15 +155,34 @@ a `@source` entry pointing into `node_modules/@visibleprojects/report-a-problem`
 is fragile and easy to silently drift out of sync across repos.
 
 Instead, the component ships its own **scoped, pre-built CSS file**
-(`dist/style.css`, hand-written — not Tailwind — under a `.rap-*` class
-prefix so it can never collide with a consumer's own classes), which the
-consumer imports once (`import '@visibleprojects/report-a-problem/style.css'`
-in their root layout). Colors are exposed as CSS custom properties with
-neutral defaults (`--rap-accent`, `--rap-bg`, `--rap-surface`, `--rap-text`,
-`--rap-border`, `--rap-warning`), so a consumer with its own brand palette
-(Visible Projects' charcoal/amber/slate/ember, or whatever a given repo
-uses) overrides them in their own global CSS — no Tailwind dependency, no
+(hand-written — not Tailwind — under a `.rap-*` class prefix so it can never
+collide with a consumer's own classes), which the consumer imports once
+(`import '@visibleprojects/report-a-problem/style.css'` in their root
+layout). Colors are exposed as CSS custom properties with neutral defaults
+(`--rap-accent`, `--rap-bg`, `--rap-surface`, `--rap-text`, `--rap-border`,
+`--rap-warning`), so a consumer with its own brand palette (Visible
+Projects' charcoal/amber/slate/ember, or whatever a given repo uses)
+overrides them in their own global CSS — no Tailwind dependency, no
 build-time coupling to the consumer's Tailwind version, no scanning problem.
+
+**Build artifact, made concrete (round 2 finding):** `tsc` alone does not
+produce this file — it only compiles `.ts`/`.tsx`. `src/style.css` is the
+source; the `build` script is `tsc && cp src/style.css dist/style.css`
+(a second tool is unwarranted for one static file). `package.json` declares
+an explicit export map so the subpath resolves regardless of bundler:
+
+```json
+"exports": {
+  ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+  "./style.css": "./dist/style.css"
+},
+"files": ["dist"]
+```
+
+The package's CI includes a smoke test that installs the **exact tagged
+GitHub tarball** (not the local working tree) into a throwaway consumer
+project and asserts both `dist/index.js` and `dist/style.css` are present
+and resolvable — catching a build/publish mismatch before a consumer does.
 
 ### Handler factories
 
@@ -241,25 +278,48 @@ workspace/project URL.
 
 ### Fixed security behavior (non-configurable, round 1 findings)
 
-- **Attachment path ownership.** Every `screenshotPaths` entry must be
-  prefixed with the authenticated caller's own `user.id` (exactly the check
-  just added to experttech in PR #194) before it is ever signed. A path that
-  fails this check is silently dropped from the report, never signed, never
-  embedded — the same "never block the report over one bad attachment"
-  posture already used for a failed upload.
-- **Delivery success contract.** The DB row is not modeled as a "sink" —
-  it's the one required, non-optional persistence step. If the insert into
-  `table` fails, the handler returns `{ ok: false }` (the panel shows a real
-  retry error), rather than experttech's current behavior of returning
-  `{ ok: true }` even when every delivery attempt failed. Email/WhatsApp/Plane
-  stay best-effort on top of that guaranteed write — one of them failing
-  never fails the response, matching today's behavior for those three.
-  Whether the migration has actually been run isn't something the handler
-  can verify at runtime (a missing table just surfaces as the same insert
-  failure as any other DB error) — the README states it as a hard
-  prerequisite: run the migration before wiring the route, and the panel
-  showing a retry error on every submit is the expected symptom of skipping
-  that step, not a mysterious failure.
+- **Attachment path ownership — exact grammar (round 2 tightened this).**
+  "Prefixed with the caller's user id" is ambiguous enough to implement
+  wrong: a bare `path.startsWith(user.id)` also accepts a sibling id that
+  merely starts with the same characters (`abc123-evil/...` passing for
+  user `abc123`), reopening the vulnerability round 1 closed. The actual
+  rule, matching experttech PR #194 exactly: the path's **first complete
+  path segment**, split on `/`, must equal `user.id` verbatim — implemented
+  as `path.startsWith(\`${user.id}/\`)` (the trailing slash is what turns a
+  substring test into a segment-boundary test), never a bare prefix check.
+  A path that fails this check is silently dropped from the report, never
+  signed, never embedded — the same "never block the report over one bad
+  attachment" posture already used for a failed upload. The package's
+  contract tests include adversarial near-prefix cases (a sibling id
+  sharing a prefix, an empty segment, a path with no `/` at all) alongside
+  the legitimate-owner case, not just the two happy/unhappy paths round 1's
+  tests covered.
+- **Delivery success contract + idempotency (round 2 tightened this).** The
+  DB row is not modeled as a "sink" — it's the one required, non-optional
+  persistence step. If the insert into `table` fails, the handler returns
+  `{ ok: false }` (the panel shows a real retry error), rather than
+  experttech's current behavior of returning `{ ok: true }` even when every
+  delivery attempt failed. Email/WhatsApp/Plane stay best-effort on top of
+  that guaranteed write — one of them failing never fails the response,
+  matching today's behavior for those three.
+
+  Returning `ok:false` gives a client a real reason to retry for the first
+  time — round 1's fix didn't make that safe. A retry after a *lost
+  response* (the insert succeeded, but the network dropped before the
+  client saw the `200`) would otherwise create a second row, a second Plane
+  ticket, a second email. Fixed with a client-generated `submissionId`: the
+  panel creates one `crypto.randomUUID()` when it opens (not per click, so
+  clicking Send again after a failure reuses it), sent with every attempt.
+  `error_reports` gets a `submission_id text unique` column; the insert
+  becomes `INSERT ... ON CONFLICT (submission_id) DO NOTHING RETURNING id`.
+  No row returned means this exact submission already exists — the handler
+  fetches that existing row and returns its (already-assigned) reference
+  **without re-running any sink**. Sinks only ever fire following a row
+  that was newly inserted this call. Whether the migration has actually
+  been run isn't something the handler can verify at runtime (a missing
+  table just surfaces as the same insert failure as any other DB error) —
+  the README states it as a hard prerequisite: run the migration before
+  wiring the route.
 
 ## Data model
 
@@ -270,11 +330,12 @@ into your repo's migrations directory, adjust the table/bucket name if you
 changed the defaults, run them your way.
 
 `error_reports` ships only the columns the CORE route actually reads or
-writes: `id`, `user_id`, `user_email`, `client_id` (nullable — not every
-consumer is multi-tenant), `route`, `code`, `user_message`,
-`technical_message`, `stack`, `context`, `user_agent`, `dedup_key`,
-`screenshot_paths`, `ticket_number` (+ its sequence), `delivered`,
-`plane_intake_id`, `plane_issue_id`. `dedup_key`/`plane_intake_id`/
+writes: `id`, `submission_id` (text, **unique** — the idempotency key, see
+"Delivery success contract" above), `user_id`, `user_email`, `client_id`
+(nullable — not every consumer is multi-tenant), `route`, `code`,
+`user_message`, `technical_message`, `stack`, `context`, `user_agent`,
+`dedup_key`, `screenshot_paths`, `ticket_number` (+ its sequence),
+`delivered`, `plane_intake_id`, `plane_issue_id`. `dedup_key`/`plane_intake_id`/
 `plane_issue_id` are written by the core route regardless of the triage
 sweep (useful for debugging, and let a consumer adopt the sweep later
 without a schema change) — but the sweep-only columns
