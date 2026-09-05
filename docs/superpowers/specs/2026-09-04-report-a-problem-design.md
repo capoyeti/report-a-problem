@@ -1,7 +1,7 @@
 # report-a-problem: portable bug-report module — design spec
 
-Date: 2026-09-04 (revised after round-1 adversarial review)
-Status: revised, pending round-2 review
+Date: 2026-09-04, revised through 2026-09-05 (3 rounds of adversarial review, capped per policy)
+Status: reviewed and settled — ready for independent review / implementation
 Origin: extracted from `experttech` PR #190 (https://github.com/capoyeti/experttech/pull/190)
 and PR #194 (https://github.com/capoyeti/experttech/pull/194 — an attachment-ownership
 security fix found while reviewing this spec; already applied to experttech directly)
@@ -32,7 +32,28 @@ user.id") that a literal implementation could use a bare `startsWith(user.id)`
 — which a sibling id merely starting with the same characters would also
 pass — reopening the exact vulnerability round 1 closed, even though the
 actual experttech fix (PR #194) already does this correctly with a full
-path-segment boundary. All three are addressed below.
+path-segment boundary.
+
+**Round 3**, reviewing THAT revision, closed the attachment-ownership
+grammar cleanly but found the other two fixes still had gaps: the
+`submission_id` idempotency design assumed insert-then-sinks happens
+atomically (it doesn't — a crash or lost response strictly between the
+insert committing and the sinks running leaves a row with no sinks ever
+run, and a retry would wrongly treat "row exists" as "already delivered"
+and skip sinks again, forever); a nullable `submission_id` would let
+Postgres silently admit multiple `NULL`s past the `UNIQUE` constraint,
+letting any client that omits it bypass dedup entirely; and the spec never
+stated that `dist/` must be committed to git — without that, a GitHub tag
+archive (no build step runs) simply wouldn't contain the compiled output at
+all. This was round 3 of the review's 3-round cap, so per the loop's own
+stop policy the crash/lost-response gap was surfaced as a decision rather
+than looped on further: **accepted as a documented v1 limitation** (this
+failure window already exists implicitly in experttech today; the
+properly-correct fix is a per-sink delivery-state/outbox mechanism, real
+added scope, deliberately deferred — see "Accepted limitation" under
+Delivery success contract). The other two (NOT NULL + server-side fallback;
+`dist/` committed to git, matching `doc-render`'s actual practice) are
+fixed below.
 
 ## Purpose
 
@@ -87,12 +108,25 @@ Versioned via git tags (`v0.1.0`, `v0.2.0`, ...). A consumer bumps its
 the existing pattern (`tabono`/`devpulse` both pin `doc-render` to an
 explicit tag today).
 
+**`dist/` is committed to git, not gitignored (round 3 finding, made
+explicit).** A GitHub tag tarball is a raw archive of whatever's committed
+at that tag — no build step, no `prepack`/`prepare` lifecycle runs. Verified
+this is exactly how `doc-render` already does it: its `.gitignore` only
+excludes `node_modules/`, and `dist/*.js`/`dist/*.d.ts` are tracked files,
+committed on every release. This package follows the identical release
+process: build locally, commit `dist/` (including `dist/style.css`), tag,
+push. The CI smoke test (see Styling) catches a forgotten `dist/` commit
+before a consumer does.
+
 ## Package layout
 
 ```
 report-a-problem/
   package.json          # name, main/types, peerDependencies
   tsconfig.json
+  dist/                  # BUILD OUTPUT, committed to git (see Distribution) —
+                          # a GitHub tag archive has no build step, so this
+                          # must already be checked in at every release tag
   src/
     index.ts            # public exports
     style.css            # source for the shipped dist/style.css (see Styling)
@@ -310,16 +344,39 @@ workspace/project URL.
   ticket, a second email. Fixed with a client-generated `submissionId`: the
   panel creates one `crypto.randomUUID()` when it opens (not per click, so
   clicking Send again after a failure reuses it), sent with every attempt.
-  `error_reports` gets a `submission_id text unique` column; the insert
-  becomes `INSERT ... ON CONFLICT (submission_id) DO NOTHING RETURNING id`.
-  No row returned means this exact submission already exists — the handler
-  fetches that existing row and returns its (already-assigned) reference
-  **without re-running any sink**. Sinks only ever fire following a row
-  that was newly inserted this call. Whether the migration has actually
-  been run isn't something the handler can verify at runtime (a missing
-  table just surfaces as the same insert failure as any other DB error) —
-  the README states it as a hard prerequisite: run the migration before
-  wiring the route.
+  `error_reports` gets a `submission_id text NOT NULL unique` column; the
+  insert becomes `INSERT ... ON CONFLICT (submission_id) DO NOTHING
+  RETURNING id`. No row returned means this exact submission already exists
+  — the handler fetches that existing row and returns its (already-assigned)
+  reference **without re-running any sink**. Sinks only ever fire following
+  a row that was newly inserted this call. `NOT NULL` matters here (round 3
+  finding): Postgres treats every `NULL` as distinct under a plain `UNIQUE`
+  constraint, so a nullable column would let any client that omits
+  `submissionId` — an old cached tab still running pre-idempotency code, or
+  a direct API call bypassing the panel — bypass dedup entirely, silently.
+  The handler enforces the column itself: if the client didn't send one, it
+  generates `crypto.randomUUID()` server-side before inserting, so the
+  column is always populated — that request just doesn't get idempotency
+  protection (there was nothing to dedupe against anyway), rather than
+  failing the insert outright. Whether the migration has actually been run
+  isn't something the handler can verify at runtime (a missing table just
+  surfaces as the same insert failure as any other DB error) — the README
+  states it as a hard prerequisite: run the migration before wiring the
+  route.
+
+  **Accepted limitation (round 3 finding, deliberately not fixed for v1):**
+  this scheme assumes the insert and the sink calls happen in one
+  request. If the process crashes or times out strictly between the insert
+  committing and the sinks running, the row exists permanently with no
+  Plane ticket/email ever sent, and a retry would see the existing row and
+  (wrongly) skip sinks again — a permanently silent report. This exact
+  failure window already exists implicitly in experttech today (nothing
+  there is transactional either); the difference here is only that a retry
+  now exists as a concept and can't self-heal that specific case. Closing
+  this properly needs per-sink delivery state (an outbox: track which sinks
+  succeeded on the row, let a retry resume only what's missing) — real
+  added scope, deliberately deferred rather than built into v1. Revisit if
+  it's ever observed in practice.
 
 ## Data model
 
@@ -330,8 +387,8 @@ into your repo's migrations directory, adjust the table/bucket name if you
 changed the defaults, run them your way.
 
 `error_reports` ships only the columns the CORE route actually reads or
-writes: `id`, `submission_id` (text, **unique** — the idempotency key, see
-"Delivery success contract" above), `user_id`, `user_email`, `client_id`
+writes: `id`, `submission_id` (text, **NOT NULL, unique** — the idempotency
+key, see "Delivery success contract" above), `user_id`, `user_email`, `client_id`
 (nullable — not every consumer is multi-tenant), `route`, `code`,
 `user_message`, `technical_message`, `stack`, `context`, `user_agent`,
 `dedup_key`, `screenshot_paths`, `ticket_number` (+ its sequence),
