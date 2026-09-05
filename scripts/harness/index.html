@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>report-a-problem panel harness</title>
+    <link rel="stylesheet" href="/dist/style.css" />
+    <style>
+      body { margin: 0; font-family: system-ui, sans-serif; background: #fafafa; color: #18181b; }
+      .page { padding: 48px 32px; max-width: 720px; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      p { color: #52525b; line-height: 1.5; }
+      .trigger { margin-top: 20px; padding: 8px 16px; font: inherit; font-size: 14px; border: 1px solid #d4d4d8; border-radius: 8px; background: #fff; cursor: pointer; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/shim/react.js",
+          "react/jsx-runtime": "/shim/jsx-runtime.js",
+          "react-dom/client": "/shim/react-dom-client.js",
+          "lucide-react": "/shim/lucide-react.js",
+          "html2canvas": "/shim/html2canvas.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Report a problem, panel harness</h1>
+      <p>
+        This page exists so the panel can be driven headed against the built package
+        with no app around it. The two endpoints below are mocked by the verify script.
+      </p>
+      <div id="root"></div>
+    </div>
+    <script type="module">
+      import { createElement as h } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { ReportProblemProvider, useReportProblem } from '/dist/index.js';
+
+      const endpoints = { report: '/mock/report', attachment: '/mock/attachment' };
+
+      function Trigger() {
+        const { open } = useReportProblem();
+        return h('button', { className: 'trigger', onClick: open, 'data-testid': 'harness-trigger' }, 'Report a problem');
+      }
+
+      createRoot(document.getElementById('root')).render(
+        h(ReportProblemProvider, { enabled: true, endpoints }, h(Trigger))
+      );
+    </script>
+  </body>
+</html>
