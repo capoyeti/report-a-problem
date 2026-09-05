@@ -6,3 +6,7 @@ export { needsScreenshot } from './lib/needs-screenshot.js';
 export { sanitizeAttachmentFilename } from './lib/attachment-filename.js';
 export { createReportProblemHandlers } from './server/handlers.js';
 export type { ReportProblemHandlerConfig, ReportProblemSession } from './server/types.js';
+export { ReportProblemPanel } from './client/ReportProblemPanel.js';
+export type { ReportProblemPanelProps } from './client/ReportProblemPanel.js';
+export { ReportProblemProvider, useReportProblem } from './client/ReportProblemProvider.js';
+export { uploadAttachment } from './client/upload.js';
