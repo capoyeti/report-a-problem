@@ -1,0 +1,16 @@
+/* @visibleprojects/report-a-problem. Override any --rap-* token in your own global CSS. */
+:root {
+  --rap-accent: #2563eb;
+  --rap-accent-text: #ffffff;
+  --rap-bg: #ffffff;
+  --rap-surface: #f4f4f5;
+  --rap-text: #18181b;
+  --rap-muted: #71717a;
+  --rap-border: #e4e4e7;
+  --rap-warning: #b45309;
+  --rap-danger: #b91c1c;
+  --rap-radius: 12px;
+  --rap-shadow: 0 10px 30px rgba(0,0,0,.18);
+  --rap-font: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --rap-z: 2147483000;
+}

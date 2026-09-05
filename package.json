@@ -1,0 +1,42 @@
+{
+  "name": "@visibleprojects/report-a-problem",
+  "version": "0.1.0",
+  "description": "Report-a-problem panel plus server forwarders for error-triage-service.",
+  "repository": "github:capoyeti/report-a-problem",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./style.css": "./dist/style.css"
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc && cp src/style.css dist/style.css",
+    "test": "vitest run",
+    "verify:panel": "npx tsx scripts/report-panel-verify.ts",
+    "smoke:tarball": "bash scripts/smoke-tarball.sh"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18",
+    "lucide-react": ">=0.400",
+    "html2canvas": ">=1.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.14",
+    "@types/react-dom": "^18.3.5",
+    "@types/node": "^22.10.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "lucide-react": "^0.468.0",
+    "html2canvas": "^1.4.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "jsdom": "^25.0.1",
+    "playwright": "^1.49.0",
+    "tsx": "^4.19.2"
+  },
+  "engines": { "node": ">=20" }
+}
