@@ -1,7 +1,10 @@
 # report-a-problem: portable bug-report module — design spec
 
 Date: 2026-09-04, revised through 2026-09-05 (3 rounds of adversarial review, capped per policy)
-Status: reviewed and settled — ready for independent review / implementation
+Status: **SUPERSEDED 2026-09-05** by `2026-09-05-consolidation-design.md`. The
+per-repo library-with-its-own-DB shape described here was closed in favour of
+`error-triage-service` as the single backend; the panel, attachment, idempotency
+and distribution findings below were carried into that spec. Kept for the review history.
 Origin: extracted from `experttech` PR #190 (https://github.com/capoyeti/experttech/pull/190)
 and PR #194 (https://github.com/capoyeti/experttech/pull/194 — an attachment-ownership
 security fix found while reviewing this spec; already applied to experttech directly)
