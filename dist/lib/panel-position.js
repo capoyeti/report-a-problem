@@ -1,9 +1,11 @@
 // src/lib/panel-position.ts
-//
-// Pure clamp for the draggable "Report a problem" panel: keeps at least
-// MIN_VISIBLE px of the panel on-screen on every axis so a drag can never
-// lose the panel off-viewport with no way to bring it back.
 const MIN_VISIBLE = 40;
+/**
+ * Keeps at least a grabbable sliver of the panel on-screen on every axis. Without
+ * this a drag can park the panel entirely outside the viewport, and because the
+ * panel is its own drag handle there is then no way to bring it back short of a
+ * reload, which loses a half-written report.
+ */
 export function clampPanelPosition(pos, panel, viewport) {
     const maxX = viewport.width - MIN_VISIBLE;
     const maxY = viewport.height - MIN_VISIBLE;

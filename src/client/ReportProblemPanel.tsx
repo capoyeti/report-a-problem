@@ -25,6 +25,10 @@ const ALLOWED_TYPES = [...IMAGE_TYPES, ...DOC_TYPES];
 
 const DEFAULT_ENDPOINTS = { report: '/api/error-report', attachment: '/api/error-report/attachment' };
 
+/**
+ * `endpoints` points at the consumer's own routes, not at the service. Both
+ * default to the paths the README wires up, so most apps never pass it.
+ */
 export interface ReportProblemPanelProps {
   open: boolean;
   onClose: () => void;
@@ -474,4 +478,5 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   );
 }
 
+/** Default as well as named, because `React.lazy` accepts only a default export. */
 export default ReportProblemPanel;

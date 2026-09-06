@@ -1,10 +1,14 @@
 # @visibleprojects/report-a-problem
 
-The app-side half of the report-a-problem stack. The backend of record is
-[`error-triage-service`](https://error-triage-service.vercel.app); this package
-is the panel your users see and the two server routes that forward to it. No
-database, no migrations, no sinks, no environment variables read inside the
+The app-side half of a two-part report-a-problem stack. The backend of record is
+`error-triage-service`, a separate deployment that owns the database, the
+attachment storage and the notification sinks. This package is the panel your
+users see and the two server routes that forward to that service. No database, no
+migrations, no sinks, and no environment variables read anywhere inside the
 package.
+
+One service serves many apps, so an app adopting this package needs a service URL
+and a per-app key, and nothing else.
 
 ## What you get
 
@@ -23,8 +27,9 @@ package.
 - `style.css`: hand-written, `rap-` prefixed, every colour a `--rap-*` custom
   property. No Tailwind, no CSS-in-JS, nothing that can collide with your styles.
 
-Attachment bytes never pass through your server or the service. The panel asks
-your route for a signed URL and PUTs the file straight to the service's storage.
+Attachment bytes never pass through your server or the service function. The
+panel asks your route for a signed URL and PUTs the file straight to the
+service's storage, which keeps uploads clear of serverless request body limits.
 
 ## Install
 
@@ -32,13 +37,21 @@ your route for a signed URL and PUTs the file straight to the service's storage.
 npm i https://github.com/capoyeti/report-a-problem/archive/refs/tags/v0.1.0.tar.gz
 ```
 
-Pin the tag. `dist/` is committed, so the tarball needs no build step. Peer
-dependencies you must already have: `react`, `react-dom`, `lucide-react`,
-`html2canvas`.
+Pin the tag. `dist/` is committed, so the tarball installs with no build step of
+its own. Peer dependencies you must already have: `react` and `react-dom` (18 or
+newer), `lucide-react` for the icons, `html2canvas` for the opening capture.
+
+The repository is private, so that URL needs access to it.
+
+The examples below are Next.js App Router. The forwarders take a web-standard
+`Request` and return a `Response`, so any other framework is a one-line adapter.
 
 ## Server wiring
 
-Two route files, one shared config object.
+Two route files, one shared config object. `verifySession` is yours: any function
+that resolves the current user, returning `{ error }` when there is not one. The
+example calls a `verifySession` helper of the kind a Supabase app tends to have,
+but nothing about the package assumes Supabase.
 
 ```ts
 // app/api/error-report/route.ts
@@ -175,10 +188,11 @@ with `NEXT_PUBLIC_`.
 | `TRIAGE_SERVICE_URL` | the service origin, e.g. `https://error-triage-service.vercel.app` |
 | `TRIAGE_SERVICE_KEY` | the per-app `X-Triage-Key` |
 
-To get a key, register your app with `error-triage-service` (its README covers
-provisioning: the app slug, Plane project, recipients, `ticket_prefix` and
-`reporter_confirmation`). One key per app; rotating it is a service-side change
-with no redeploy here.
+To get a key, register your app with `error-triage-service`. Registration is a
+row in the service's own `apps` table (slug, issue-tracker project, notification
+recipients, `ticket_prefix`, `reporter_confirmation`), and its README is the
+reference. One key per app. Rotating a key is a service-side change and needs no
+redeploy here.
 
 ## Verifying locally
 
@@ -205,3 +219,7 @@ bash scripts/smoke-tarball.sh v0.1.0
 
 The smoke script installs that exact tag into a throwaway consumer and resolves
 both exports. CI runs it automatically on any `v*` tag push.
+
+## License
+
+MIT. See `LICENSE`.

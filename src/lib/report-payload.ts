@@ -1,28 +1,39 @@
 // src/lib/report-payload.ts
-//
-// Builds the /api/error-report body for a USER-INITIATED problem report (the
-// "Report a problem" menu action), as opposed to the reactive ErrorProvider
-// toast that fires on a caught error.
-//
-// error-triage-service caps userMessage at 300 chars and technicalMessage at
-// 2048. We mirror those limits here so a long description never trips the
-// service's 400 (invalid_body) path: a 300-char head lands in userMessage (the
-// email subject/summary line), and the full text, up to 2048, rides in
-// technicalMessage. Kept as a pure function so the slice boundaries are
-// unit-testable without a DOM.
 
-export const USER_MESSAGE_MAX = 300; // must match BodySchema.userMessage.max
-export const TECHNICAL_MAX = 2048; // must match BodySchema.technicalMessage.max
+/**
+ * Mirrors the service's own cap on `user_message`. Kept in the client so a long
+ * description is split here rather than rejected there with a 400.
+ */
+export const USER_MESSAGE_MAX = 300;
 
+/**
+ * Mirrors the service's own cap on `technical_message`, and doubles as the
+ * panel textarea's `maxLength` so the reporter is stopped at the boundary
+ * instead of silently losing the tail of what they wrote.
+ */
+export const TECHNICAL_MAX = 2048;
+
+/**
+ * Diagnostics the panel scrapes off `window` at send time. Every field is
+ * optional because this has to build on a server render and in a stripped-down
+ * browser, and a missing field is always better than blocking the report.
+ */
 export interface ReportContext {
   route?: string;
   href?: string;
   referrer?: string;
   title?: string;
   viewport?: string;
+  // This package captures nothing to Sentry. The field survives so a consumer
+  // that does can attach its own event id and have it stored with the report.
   sentryEventId?: string;
 }
 
+/**
+ * The camelCase body the panel POSTs to the consumer's own route. The forwarder
+ * translates it into the service's snake_case payload, so this shape is the
+ * contract between panel and route, not between route and service.
+ */
 export interface UserReportPayload {
   userMessage: string;
   technicalMessage?: string;
@@ -32,8 +43,11 @@ export interface UserReportPayload {
 }
 
 /**
- * Build the request body for a user-initiated problem report. Returns null when
- * the description is empty/whitespace-only so the caller can skip the POST.
+ * Builds the body for a user-initiated problem report, returning null on an
+ * empty or whitespace-only description so the caller can skip the POST. Pure, so
+ * the slice boundaries around the two length caps are testable without a DOM: a
+ * 300-char head lands in userMessage (which becomes the email subject line) and
+ * the full text rides in technicalMessage.
  *
  * EXPERTTECH-201: `route` alone described where the user was STANDING when they
  * filed, not what broke (REP-1007: she reported a 404 from /settings after

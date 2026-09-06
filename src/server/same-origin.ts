@@ -1,9 +1,12 @@
 // src/server/same-origin.ts
-//
-// Compare the browser's Origin host against the Host header it sent, NOT the
-// request URL's host: Next can resolve req.url to a different host and cause
-// false 403s (learned in experttech).
 
+/**
+ * Cheap CSRF guard for the two forwarders. Compares the browser's Origin against
+ * the Host header it sent, NOT against the request URL's host: Next can resolve
+ * `req.url` to a different host behind a proxy, which produced false 403s in
+ * experttech. A request with no Origin at all (same-origin GET-style navigations,
+ * server-to-server callers) passes, since there is nothing to disagree with.
+ */
 export function isSameOrigin(req: Request): boolean {
   const origin = req.headers.get('origin') || req.headers.get('referer');
   if (!origin) return true;

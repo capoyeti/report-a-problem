@@ -1,9 +1,4 @@
 // src/lib/attachment-filename.ts
-//
-// Sanitizes a reporter-supplied filename for use as (part of) a
-// storage object key. Keeps the original name so the Plane comment can show
-// a real filename (e.g. "tender-scope.pdf") rather than an opaque request id.
-// That matters once attachments are documents, not just screenshots.
 const EXT_BY_MIME = {
     'image/png': 'png',
     'image/jpeg': 'jpg',
@@ -15,6 +10,16 @@ const EXT_BY_MIME = {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
 };
 const MAX_LENGTH = 120;
+/**
+ * Reduces a reporter-supplied filename to something safe to use as part of a
+ * storage object key, while keeping enough of the original that a triage comment
+ * can show "tender-scope.pdf" rather than an opaque id. That readability is the
+ * whole point once attachments are documents and not just screenshots.
+ *
+ * error-triage-service builds the real object key, so nothing in this package
+ * calls this. It is exported so a consumer naming its own uploads, or a service
+ * sharing this contract, applies exactly the same rules.
+ */
 export function sanitizeAttachmentFilename(name, mime) {
     const fallbackExt = EXT_BY_MIME[mime] ?? 'bin';
     const raw = name && name.trim() ? name.trim() : `attachment.${fallbackExt}`;

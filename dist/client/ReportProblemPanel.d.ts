@@ -1,3 +1,7 @@
+/**
+ * `endpoints` points at the consumer's own routes, not at the service. Both
+ * default to the paths the README wires up, so most apps never pass it.
+ */
 export interface ReportProblemPanelProps {
     open: boolean;
     onClose: () => void;
@@ -21,4 +25,5 @@ export interface ReportProblemPanelProps {
  * Controlled component: parent owns `open` and resets on `onClose`.
  */
 export declare function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPanelProps): import("react").JSX.Element | null;
+/** Default as well as named, because `React.lazy` accepts only a default export. */
 export default ReportProblemPanel;
