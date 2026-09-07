@@ -238,6 +238,7 @@
   margin-top: 12px;
   padding: 12px;
   text-align: center;
+  cursor: pointer;
   background: var(--rap-surface);
   border: 2px dashed var(--rap-border);
   border-radius: 8px;
@@ -246,6 +247,45 @@
 
 .rap-dropzone--active {
   border-color: var(--rap-warning);
+}
+
+/* The zone is the file picker's button, so it has to show keyboard focus. */
+.rap-dropzone:focus-visible {
+  outline: 2px solid var(--rap-accent);
+  outline-offset: 2px;
+  border-color: var(--rap-accent);
+}
+
+.rap-dropzone-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Reads against the zone's surface, where a transparent rap-btn would not. */
+.rap-dropzone-actions .rap-btn {
+  background: var(--rap-bg);
+  border-color: var(--rap-border);
+}
+
+.rap-dropzone-actions .rap-btn:hover:not(:disabled) {
+  background: var(--rap-surface);
+}
+
+/* Visually hidden, not display:none: it still has to be clickable and
+   focusable by the picker. */
+.rap-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .rap-dropzone-copy {

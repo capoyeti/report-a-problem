@@ -1,29 +1,41 @@
 'use client';
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal, FileText } from 'lucide-react';
+import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal, FileText, ClipboardPaste } from 'lucide-react';
 import { buildUserReportPayload, TECHNICAL_MAX } from '../lib/report-payload.js';
 import { needsScreenshot } from '../lib/needs-screenshot.js';
 import { clampPanelPosition } from '../lib/panel-position.js';
 import { uploadAttachment } from './upload.js';
+import { ALLOWED_TYPES, IMAGE_TYPES, buildAcceptAttribute, clipboardBlobToFile, firstAllowedImageType } from './attachments.js';
 // Marks the panel's own DOM subtree so the auto-capture (html2canvas over
 // document.body) can exclude it. The shot must show what was BEHIND the
 // panel, never the panel itself.
 const PANEL_ROOT_ATTR = 'data-report-panel-root';
 const MAX_SHOTS = 6;
 const MAX_BYTES = 8 * 1024 * 1024;
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-const DOC_TYPES = [
-    'application/pdf',
-    'text/plain',
-    'text/csv',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-];
-const ALLOWED_TYPES = [...IMAGE_TYPES, ...DOC_TYPES];
+const ACCEPT = buildAcceptAttribute();
+const CLIPBOARD_BLOCKED = 'Your browser blocked clipboard access; press Cmd+V (Ctrl+V) instead or choose a file.';
 const DEFAULT_ENDPOINTS = { report: '/api/error-report', attachment: '/api/error-report/attachment' };
 function isImageFile(file) {
     return IMAGE_TYPES.includes(file.type);
+}
+// Screenshot tools differ: some put the image in `files`, some only expose it
+// through `items`. Reading both is the difference between Cmd+V working and
+// doing nothing at all.
+function clipboardFile(data) {
+    if (!data)
+        return null;
+    const direct = Array.from(data.files ?? [])[0];
+    if (direct)
+        return direct;
+    for (const item of Array.from(data.items ?? [])) {
+        if (item.kind !== 'file')
+            continue;
+        const file = item.getAsFile();
+        if (file)
+            return file;
+    }
+    return null;
 }
 function formatBytes(bytes) {
     return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
@@ -74,7 +86,15 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
     const [autoShot, setAutoShot] = useState(null);
     const [position, setPosition] = useState(null); // null = start centered
     const [dragging, setDragging] = useState(false);
+    // Feature-detected after mount rather than at render, so a server render and
+    // the first client render agree.
+    const [clipboardReadable, setClipboardReadable] = useState(false);
     const panelRef = useRef(null);
+    const fileInputRef = useRef(null);
+    // A paste inside the textarea reaches both React's onPaste and the
+    // document-level listener. Marking the native event stops the second one
+    // attaching the same file twice.
+    const handledPastes = useRef(new WeakSet());
     const dragRef = useRef(null);
     // One id per open, reused across retries so the service can settle a
     // duplicate rather than filing two reports for one problem.
@@ -95,6 +115,74 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
         setPosition(null);
         onClose();
     }, [onClose]);
+    // Every route in (drop, file picker, Cmd+V, the clipboard button) funnels
+    // through here, so the size cap, the type check and the MAX_SHOTS rule are
+    // enforced in exactly one place. The last rejection wins the hint; a batch
+    // that lands at least one file still clears an earlier error.
+    const acceptFiles = useCallback((files) => {
+        if (!files.length)
+            return;
+        const room = MAX_SHOTS - shots.length;
+        if (room <= 0) {
+            setShotError(`You can attach up to ${MAX_SHOTS} files.`);
+            return;
+        }
+        const accepted = [];
+        let hint = null;
+        for (const f of files) {
+            if (accepted.length >= room) {
+                hint = `You can attach up to ${MAX_SHOTS} files.`;
+                break;
+            }
+            if (!ALLOWED_TYPES.includes(f.type)) {
+                hint = 'That file type is not supported. Use a PNG/JPG/WebP screenshot, a PDF, a text/CSV file, or a Word/Excel doc.';
+                continue;
+            }
+            if (f.size > MAX_BYTES) {
+                hint = `That file is over ${formatBytes(MAX_BYTES)}.`;
+                continue;
+            }
+            accepted.push({ id: newId(), file: f, previewUrl: isImageFile(f) ? URL.createObjectURL(f) : undefined });
+        }
+        setShotError(hint);
+        if (accepted.length)
+            setShots((prev) => [...prev, ...accepted]);
+    }, [shots.length]);
+    const acceptFile = useCallback((f) => { if (f)
+        acceptFiles([f]); }, [acceptFiles]);
+    const handlePaste = useCallback((e) => {
+        if (handledPastes.current.has(e))
+            return;
+        const file = clipboardFile(e.clipboardData);
+        if (!file)
+            return; // plain text: leave the paste alone so it lands in the textarea
+        handledPastes.current.add(e);
+        // A file on the clipboard becomes an attachment, never a wall of binary
+        // in the description.
+        e.preventDefault();
+        acceptFile(file);
+    }, [acceptFile]);
+    // Paste belongs to the whole panel, not to the textarea. A reporter who has
+    // just taken a screenshot presses Cmd+V wherever the cursor happens to be,
+    // and before this it silently did nothing (EXPERTTECH-243). An editable
+    // element outside the panel keeps its own paste.
+    useEffect(() => {
+        if (!open)
+            return;
+        const onDocumentPaste = (e) => {
+            const target = e.target;
+            const insidePanel = !!target && !!panelRef.current && panelRef.current.contains(target);
+            const isEditable = !!target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable);
+            if (isEditable && !insidePanel)
+                return;
+            handlePaste(e);
+        };
+        document.addEventListener('paste', onDocumentPaste);
+        return () => document.removeEventListener('paste', onDocumentPaste);
+    }, [open, handlePaste]);
+    useEffect(() => {
+        setClipboardReadable(typeof navigator !== 'undefined' && typeof navigator.clipboard?.read === 'function');
+    }, []);
     // Escape closes, but never while the reporter is typing (an accidental or
     // muscle-memory Escape must not nuke a half-written report), and never
     // mid-send, so we do not abandon an in-flight POST without feedback.
@@ -149,23 +237,29 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
     }, [open]);
     if (!open)
         return null;
-    const acceptFile = (f) => {
-        if (!f)
-            return;
-        if (shots.length >= MAX_SHOTS) {
-            setShotError(`You can attach up to ${MAX_SHOTS} files.`);
-            return;
+    const openFilePicker = () => fileInputRef.current?.click();
+    // The explicit button exists because right-clicking a div offers no Paste,
+    // and a reporter who cannot find Cmd+V has no other way in. Permission can
+    // be refused (or the API can be absent behind an insecure origin), so every
+    // failure ends as a hint rather than an exception.
+    const pasteFromClipboard = async () => {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const type = firstAllowedImageType(item.types);
+                if (!type)
+                    continue;
+                const file = clipboardBlobToFile(await item.getType(type));
+                if (file) {
+                    acceptFile(file);
+                    return;
+                }
+            }
+            setShotError('There was no image on your clipboard. Take a screenshot first, or choose a file.');
         }
-        if (!ALLOWED_TYPES.includes(f.type)) {
-            setShotError('That file type is not supported. Use a PNG/JPG/WebP screenshot, a PDF, a text/CSV file, or a Word/Excel doc.');
-            return;
+        catch {
+            setShotError(CLIPBOARD_BLOCKED);
         }
-        if (f.size > MAX_BYTES) {
-            setShotError(`That file is over ${formatBytes(MAX_BYTES)}.`);
-            return;
-        }
-        setShotError(null);
-        setShots((prev) => [...prev, { id: newId(), file: f, previewUrl: isImageFile(f) ? URL.createObjectURL(f) : undefined }]);
     };
     const removeShot = (id) => {
         setShots((prev) => {
@@ -270,14 +364,25 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
     const nudgeForShot = needsScreenshot(description) && shots.length === 0;
     return (_jsxs("div", { ref: panelRef, [PANEL_ROOT_ATTR]: 'true', className: dragging ? 'rap-panel rap-panel--dragging' : 'rap-panel', style: panelStyle, role: "dialog", "aria-modal": "false", "aria-label": "Report a problem", "data-testid": "report-problem-panel", children: [_jsxs("div", { className: "rap-handle", onPointerDown: onHeaderPointerDown, onPointerMove: onHeaderPointerMove, onPointerUp: onHeaderPointerUp, "data-testid": "report-drag-handle", children: [_jsxs("div", { className: "rap-handle-left", children: [_jsx(GripHorizontal, { className: "rap-icon rap-icon--faint" }), _jsx(Bug, { className: "rap-icon" }), _jsx("h2", { className: "rap-title", children: "Report a problem" })] }), _jsx("button", { onClick: close, disabled: state === 'sending', "aria-label": "Close", className: "rap-icon-btn", children: _jsx(X, { className: "rap-icon" }) })] }), _jsx("div", { className: "rap-body", children: state === 'sent' ? (_jsxs("div", { className: "rap-success", "data-testid": "report-sent", children: [_jsx(CheckCircle2, { className: "rap-icon" }), _jsxs("div", { children: [_jsx("p", { className: "rap-success-title", children: "Thanks, the team has it." }), reference ? (_jsxs("p", { className: "rap-success-ref", children: ["Your reference is ", _jsx("span", { className: "rap-ref", children: reference }), "."] })) : null, _jsx("p", { className: "rap-hint", children: emailedCopy
                                         ? "We've emailed you a copy, just reply or forward it to follow up."
-                                        : 'You can quote this reference if you follow up with the team.' })] })] })) : (_jsxs(_Fragment, { children: [_jsx("label", { htmlFor: "rap-report-text", className: "rap-label", children: "Tell us what went wrong. The team gets this with the page you were on so they can look into it. Drag this panel by its title bar if it's in your way, the page underneath stays usable." }), _jsx("textarea", { id: "rap-report-text", "data-testid": "report-text", autoFocus: true, value: description, maxLength: TECHNICAL_MAX, onChange: (e) => setDescription(e.target.value), onPaste: (e) => acceptFile(Array.from(e.clipboardData.files)[0]), disabled: state === 'sending', rows: 5, placeholder: "e.g. I clicked Generate and nothing happened for a few minutes.", className: "rap-textarea" }), _jsxs("div", { className: "rap-counter", children: [_jsxs("span", { className: description.length > TECHNICAL_MAX * 0.9 ? 'rap-hint rap-hint--warn' : 'rap-hint', children: [description.length, "/", TECHNICAL_MAX] }), errorHint ? (_jsx("span", { className: "rap-error", "data-testid": "report-error", children: errorHint })) : null] }), autoShot ? (_jsxs("div", { className: "rap-consent", "data-testid": "report-auto-shot", children: [_jsx("img", { src: autoShot.previewUrl ?? '', alt: "Screen as you clicked Report a problem", className: "rap-consent-thumb" }), _jsxs("div", { className: "rap-consent-copy", children: [_jsx("p", { className: "rap-consent-title", children: "We grabbed the page as you opened this." }), _jsx("p", { className: "rap-hint", children: "Only visible if you choose to include it." })] }), _jsxs("div", { className: "rap-consent-actions", children: [_jsx("button", { type: "button", onClick: includeAutoShot, "data-testid": "report-auto-shot-include", className: "rap-btn rap-btn--primary rap-btn--small", children: "Include" }), _jsx("button", { type: "button", onClick: discardAutoShot, "data-testid": "report-auto-shot-discard", className: "rap-btn rap-btn--small", children: "Discard" })] })] })) : null, _jsxs("div", { onDragOver: (e) => e.preventDefault(), onDrop: (e) => {
+                                        : 'You can quote this reference if you follow up with the team.' })] })] })) : (_jsxs(_Fragment, { children: [_jsx("label", { htmlFor: "rap-report-text", className: "rap-label", children: "Tell us what went wrong. The team gets this with the page you were on so they can look into it. Drag this panel by its title bar if it's in your way, the page underneath stays usable." }), _jsx("textarea", { id: "rap-report-text", "data-testid": "report-text", autoFocus: true, value: description, maxLength: TECHNICAL_MAX, onChange: (e) => setDescription(e.target.value), onPaste: (e) => handlePaste(e.nativeEvent), disabled: state === 'sending', rows: 5, placeholder: "e.g. I clicked Generate and nothing happened for a few minutes.", className: "rap-textarea" }), _jsxs("div", { className: "rap-counter", children: [_jsxs("span", { className: description.length > TECHNICAL_MAX * 0.9 ? 'rap-hint rap-hint--warn' : 'rap-hint', children: [description.length, "/", TECHNICAL_MAX] }), errorHint ? (_jsx("span", { className: "rap-error", "data-testid": "report-error", children: errorHint })) : null] }), autoShot ? (_jsxs("div", { className: "rap-consent", "data-testid": "report-auto-shot", children: [_jsx("img", { src: autoShot.previewUrl ?? '', alt: "Screen as you clicked Report a problem", className: "rap-consent-thumb" }), _jsxs("div", { className: "rap-consent-copy", children: [_jsx("p", { className: "rap-consent-title", children: "We grabbed the page as you opened this." }), _jsx("p", { className: "rap-hint", children: "Only visible if you choose to include it." })] }), _jsxs("div", { className: "rap-consent-actions", children: [_jsx("button", { type: "button", onClick: includeAutoShot, "data-testid": "report-auto-shot-include", className: "rap-btn rap-btn--primary rap-btn--small", children: "Include" }), _jsx("button", { type: "button", onClick: discardAutoShot, "data-testid": "report-auto-shot-discard", className: "rap-btn rap-btn--small", children: "Discard" })] })] })) : null, _jsxs("div", { role: "button", tabIndex: 0, "aria-label": "Add a screenshot or file. Click to choose a file, or paste one with Cmd+V.", onClick: openFilePicker, onKeyDown: (e) => {
+                                if (e.key !== 'Enter' && e.key !== ' ')
+                                    return;
+                                e.preventDefault(); // Space would otherwise scroll the panel body
+                                openFilePicker();
+                            }, onDragOver: (e) => e.preventDefault(), onDrop: (e) => {
                                 e.preventDefault();
-                                acceptFile(Array.from(e.dataTransfer.files)[0]);
-                            }, className: nudgeForShot ? 'rap-dropzone rap-dropzone--active' : 'rap-dropzone', "data-testid": "report-shot-zone", children: [shots.length > 0 ? (_jsx("div", { className: "rap-shots", children: shots.map((s) => s.previewUrl ? (_jsxs("div", { className: "rap-shot", children: [_jsx("img", { src: s.previewUrl, alt: "Screenshot to send", className: "rap-shot-img" }), _jsx("button", { type: "button", onClick: () => removeShot(s.id), "aria-label": `Remove ${s.file.name || 'screenshot'}`, className: "rap-shot-remove", children: _jsx(Trash2, { className: "rap-icon rap-icon--tiny" }) })] }, s.id)) : (_jsxs("div", { className: "rap-shot rap-shot--file", children: [_jsx(FileText, { className: "rap-icon rap-icon--faint" }), _jsxs("div", { className: "rap-shot-meta", children: [_jsx("p", { className: "rap-shot-name", children: s.file.name || 'file' }), _jsx("p", { className: "rap-shot-size", children: formatBytes(s.file.size) })] }), _jsx("button", { type: "button", onClick: () => removeShot(s.id), "aria-label": `Remove ${s.file.name || 'file'}`, className: "rap-shot-remove", children: _jsx(Trash2, { className: "rap-icon rap-icon--tiny" }) })] }, s.id))) })) : null, _jsxs("div", { className: "rap-dropzone-copy", children: [_jsx(ImagePlus, { className: "rap-icon rap-icon--faint" }), _jsx("p", { className: "rap-dropzone-title", children: nudgeForShot
+                                acceptFiles(Array.from(e.dataTransfer.files));
+                            }, className: nudgeForShot ? 'rap-dropzone rap-dropzone--active' : 'rap-dropzone', "data-testid": "report-shot-zone", children: [_jsx("input", { ref: fileInputRef, type: "file", multiple: true, accept: ACCEPT, tabIndex: -1, "aria-hidden": "true", className: "rap-file-input", "data-testid": "report-file-input", 
+                                    // Without this the click we fire on the input bubbles back to
+                                    // the zone, which fires it again, forever.
+                                    onClick: (e) => e.stopPropagation(), onChange: (e) => {
+                                        acceptFiles(Array.from(e.target.files ?? []));
+                                        e.target.value = ''; // so picking the same file twice still fires change
+                                    } }), shots.length > 0 ? (_jsx("div", { className: "rap-shots", children: shots.map((s) => s.previewUrl ? (_jsxs("div", { className: "rap-shot", children: [_jsx("img", { src: s.previewUrl, alt: "Screenshot to send", className: "rap-shot-img" }), _jsx("button", { type: "button", onClick: (e) => { e.stopPropagation(); removeShot(s.id); }, "aria-label": `Remove ${s.file.name || 'screenshot'}`, className: "rap-shot-remove", children: _jsx(Trash2, { className: "rap-icon rap-icon--tiny" }) })] }, s.id)) : (_jsxs("div", { className: "rap-shot rap-shot--file", children: [_jsx(FileText, { className: "rap-icon rap-icon--faint" }), _jsxs("div", { className: "rap-shot-meta", children: [_jsx("p", { className: "rap-shot-name", children: s.file.name || 'file' }), _jsx("p", { className: "rap-shot-size", children: formatBytes(s.file.size) })] }), _jsx("button", { type: "button", onClick: (e) => { e.stopPropagation(); removeShot(s.id); }, "aria-label": `Remove ${s.file.name || 'file'}`, className: "rap-shot-remove", children: _jsx(Trash2, { className: "rap-icon rap-icon--tiny" }) })] }, s.id))) })) : null, _jsxs("div", { className: "rap-dropzone-copy", children: [_jsx(ImagePlus, { className: "rap-icon rap-icon--faint" }), _jsx("p", { className: "rap-dropzone-title", children: nudgeForShot
                                                 ? 'A screenshot would really help here'
                                                 : shots.length >= MAX_SHOTS
                                                     ? `Up to ${MAX_SHOTS} files`
-                                                    : 'Add a screenshot or file (optional)' }), _jsx("p", { className: "rap-hint", children: "Press Cmd+Ctrl+Shift+4 (or PrtScn), then paste with Cmd+V. Drag this panel out of the way first if it's covering what you want to capture. You can also drop files here, screenshots, PDFs, text, Word or Excel, and add as many as you need before sending." })] }), shotError ? _jsx("p", { className: "rap-error", children: shotError }) : null] })] })) }), _jsx("div", { className: "rap-footer", children: state === 'sent' ? (_jsx("button", { onClick: close, className: "rap-btn rap-btn--primary", children: "Done" })) : (_jsxs(_Fragment, { children: [_jsx("button", { onClick: close, disabled: state === 'sending', className: "rap-btn", children: "Cancel" }), _jsxs("button", { onClick: submit, disabled: state === 'sending' || trimmedEmpty, "data-testid": "report-send", className: "rap-btn rap-btn--primary", children: [state === 'sending' ? _jsx(Loader2, { className: "rap-icon rap-icon--spin" }) : _jsx(Send, { className: "rap-icon" }), state === 'sending' ? 'Sending…' : 'Send'] })] })) })] }));
+                                                    : 'Add a screenshot or file (optional)' }), _jsxs("p", { className: "rap-hint", children: ["Click to choose a file, drop one here, or paste a screenshot with Cmd+V (Ctrl+V on Windows). Screenshots, PDFs, text, Word or Excel, up to ", MAX_SHOTS, " files."] })] }), clipboardReadable ? (_jsx("div", { className: "rap-dropzone-actions", children: _jsxs("button", { type: "button", onClick: (e) => { e.stopPropagation(); void pasteFromClipboard(); }, "data-testid": "report-clipboard-paste", className: "rap-btn rap-btn--small", children: [_jsx(ClipboardPaste, { className: "rap-icon rap-icon--tiny" }), "Paste from clipboard"] }) })) : null, shotError ? _jsx("p", { className: "rap-error", children: shotError }) : null] })] })) }), _jsx("div", { className: "rap-footer", children: state === 'sent' ? (_jsx("button", { onClick: close, className: "rap-btn rap-btn--primary", children: "Done" })) : (_jsxs(_Fragment, { children: [_jsx("button", { onClick: close, disabled: state === 'sending', className: "rap-btn", children: "Cancel" }), _jsxs("button", { onClick: submit, disabled: state === 'sending' || trimmedEmpty, "data-testid": "report-send", className: "rap-btn rap-btn--primary", children: [state === 'sending' ? _jsx(Loader2, { className: "rap-icon rap-icon--spin" }) : _jsx(Send, { className: "rap-icon" }), state === 'sending' ? 'Sending…' : 'Send'] })] })) })] }));
 }
 /** Default as well as named, because `React.lazy` accepts only a default export. */
 export default ReportProblemPanel;
