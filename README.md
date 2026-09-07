@@ -15,8 +15,10 @@ and a per-app key, and nothing else.
 - `ReportProblemPanel`: a draggable, non-blocking floating panel. Captures the
   page as it looked when it opened (via `html2canvas`, DOM rasterization only,
   never a system screen capture) and offers it for the reporter to include or
-  discard. Accepts pasted and dropped screenshots, PDFs, text/CSV and Word/Excel
-  files, up to 6 files of 8MB each. Shows a human ticket reference on success.
+  discard. Takes screenshots, PDFs, text/CSV and Word/Excel files four ways:
+  click the drop zone for the file picker, drop them on it, press Cmd+V (Ctrl+V)
+  anywhere in the panel, or use its Paste from clipboard button. Up to 6 files of
+  8MB each. Shows a human ticket reference on success.
 - `ReportProblemProvider` and `useReportProblem()`: the open/close state and the
   single mount point, so a trigger anywhere in the tree is one hook call.
 - `createReportProblemHandlers(config)`: `report` and `attachment` forwarders,
@@ -34,7 +36,7 @@ service's storage, which keeps uploads clear of serverless request body limits.
 ## Install
 
 ```bash
-npm i https://github.com/capoyeti/report-a-problem/archive/refs/tags/v0.1.0.tar.gz
+npm i https://github.com/capoyeti/report-a-problem/archive/refs/tags/v0.1.1.tar.gz
 ```
 
 Pin the tag. `dist/` is committed, so the tarball installs with no build step of
@@ -213,8 +215,8 @@ change. CI enforces this with `git diff --exit-code dist`.
 ```bash
 npm run build
 git add -A && git commit -m "..."
-git tag v0.1.0 && git push origin main --tags
-bash scripts/smoke-tarball.sh v0.1.0
+git tag v0.1.1 && git push origin main --tags
+bash scripts/smoke-tarball.sh v0.1.1
 ```
 
 The smoke script installs that exact tag into a throwaway consumer and resolves

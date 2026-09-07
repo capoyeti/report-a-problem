@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal, FileText } from 'lucide-react';
+import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal, FileText, ClipboardPaste } from 'lucide-react';
 import { buildUserReportPayload, TECHNICAL_MAX, type ReportContext } from '../lib/report-payload.js';
 import { needsScreenshot } from '../lib/needs-screenshot.js';
 import { clampPanelPosition, type Point } from '../lib/panel-position.js';
 import { uploadAttachment } from './upload.js';
+import { ALLOWED_TYPES, IMAGE_TYPES, buildAcceptAttribute, clipboardBlobToFile, firstAllowedImageType } from './attachments.js';
 
 // Marks the panel's own DOM subtree so the auto-capture (html2canvas over
 // document.body) can exclude it. The shot must show what was BEHIND the
@@ -13,15 +14,8 @@ import { uploadAttachment } from './upload.js';
 const PANEL_ROOT_ATTR = 'data-report-panel-root';
 const MAX_SHOTS = 6;
 const MAX_BYTES = 8 * 1024 * 1024;
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-const DOC_TYPES = [
-  'application/pdf',
-  'text/plain',
-  'text/csv',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-];
-const ALLOWED_TYPES = [...IMAGE_TYPES, ...DOC_TYPES];
+const ACCEPT = buildAcceptAttribute();
+const CLIPBOARD_BLOCKED = 'Your browser blocked clipboard access; press Cmd+V (Ctrl+V) instead or choose a file.';
 
 const DEFAULT_ENDPOINTS = { report: '/api/error-report', attachment: '/api/error-report/attachment' };
 
@@ -37,6 +31,21 @@ export interface ReportProblemPanelProps {
 
 function isImageFile(file: File): boolean {
   return IMAGE_TYPES.includes(file.type);
+}
+
+// Screenshot tools differ: some put the image in `files`, some only expose it
+// through `items`. Reading both is the difference between Cmd+V working and
+// doing nothing at all.
+function clipboardFile(data: DataTransfer | null): File | null {
+  if (!data) return null;
+  const direct = Array.from(data.files ?? [])[0];
+  if (direct) return direct;
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+  return null;
 }
 
 function formatBytes(bytes: number): string {
@@ -99,7 +108,15 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   const [autoShot, setAutoShot] = useState<Shot | null>(null);
   const [position, setPosition] = useState<Point | null>(null); // null = start centered
   const [dragging, setDragging] = useState(false);
+  // Feature-detected after mount rather than at render, so a server render and
+  // the first client render agree.
+  const [clipboardReadable, setClipboardReadable] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // A paste inside the textarea reaches both React's onPaste and the
+  // document-level listener. Marking the native event stops the second one
+  // attaching the same file twice.
+  const handledPastes = useRef<WeakSet<Event>>(new WeakSet());
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   // One id per open, reused across retries so the service can settle a
   // duplicate rather than filing two reports for one problem.
@@ -120,6 +137,78 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
     setPosition(null);
     onClose();
   }, [onClose]);
+
+  // Every route in (drop, file picker, Cmd+V, the clipboard button) funnels
+  // through here, so the size cap, the type check and the MAX_SHOTS rule are
+  // enforced in exactly one place. The last rejection wins the hint; a batch
+  // that lands at least one file still clears an earlier error.
+  const acceptFiles = useCallback(
+    (files: File[]) => {
+      if (!files.length) return;
+      const room = MAX_SHOTS - shots.length;
+      if (room <= 0) {
+        setShotError(`You can attach up to ${MAX_SHOTS} files.`);
+        return;
+      }
+      const accepted: Shot[] = [];
+      let hint: string | null = null;
+      for (const f of files) {
+        if (accepted.length >= room) {
+          hint = `You can attach up to ${MAX_SHOTS} files.`;
+          break;
+        }
+        if (!ALLOWED_TYPES.includes(f.type)) {
+          hint = 'That file type is not supported. Use a PNG/JPG/WebP screenshot, a PDF, a text/CSV file, or a Word/Excel doc.';
+          continue;
+        }
+        if (f.size > MAX_BYTES) {
+          hint = `That file is over ${formatBytes(MAX_BYTES)}.`;
+          continue;
+        }
+        accepted.push({ id: newId(), file: f, previewUrl: isImageFile(f) ? URL.createObjectURL(f) : undefined });
+      }
+      setShotError(hint);
+      if (accepted.length) setShots((prev) => [...prev, ...accepted]);
+    },
+    [shots.length]
+  );
+
+  const acceptFile = useCallback((f: File | null | undefined) => { if (f) acceptFiles([f]); }, [acceptFiles]);
+
+  const handlePaste = useCallback(
+    (e: ClipboardEvent) => {
+      if (handledPastes.current.has(e)) return;
+      const file = clipboardFile(e.clipboardData);
+      if (!file) return; // plain text: leave the paste alone so it lands in the textarea
+      handledPastes.current.add(e);
+      // A file on the clipboard becomes an attachment, never a wall of binary
+      // in the description.
+      e.preventDefault();
+      acceptFile(file);
+    },
+    [acceptFile]
+  );
+
+  // Paste belongs to the whole panel, not to the textarea. A reporter who has
+  // just taken a screenshot presses Cmd+V wherever the cursor happens to be,
+  // and before this it silently did nothing (EXPERTTECH-243). An editable
+  // element outside the panel keeps its own paste.
+  useEffect(() => {
+    if (!open) return;
+    const onDocumentPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const insidePanel = !!target && !!panelRef.current && panelRef.current.contains(target);
+      const isEditable = !!target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable);
+      if (isEditable && !insidePanel) return;
+      handlePaste(e);
+    };
+    document.addEventListener('paste', onDocumentPaste);
+    return () => document.removeEventListener('paste', onDocumentPaste);
+  }, [open, handlePaste]);
+
+  useEffect(() => {
+    setClipboardReadable(typeof navigator !== 'undefined' && typeof navigator.clipboard?.read === 'function');
+  }, []);
 
   // Escape closes, but never while the reporter is typing (an accidental or
   // muscle-memory Escape must not nuke a half-written report), and never
@@ -171,22 +260,28 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
 
   if (!open) return null;
 
-  const acceptFile = (f: File | undefined) => {
-    if (!f) return;
-    if (shots.length >= MAX_SHOTS) {
-      setShotError(`You can attach up to ${MAX_SHOTS} files.`);
-      return;
+  const openFilePicker = () => fileInputRef.current?.click();
+
+  // The explicit button exists because right-clicking a div offers no Paste,
+  // and a reporter who cannot find Cmd+V has no other way in. Permission can
+  // be refused (or the API can be absent behind an insecure origin), so every
+  // failure ends as a hint rather than an exception.
+  const pasteFromClipboard = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = firstAllowedImageType(item.types);
+        if (!type) continue;
+        const file = clipboardBlobToFile(await item.getType(type));
+        if (file) {
+          acceptFile(file);
+          return;
+        }
+      }
+      setShotError('There was no image on your clipboard. Take a screenshot first, or choose a file.');
+    } catch {
+      setShotError(CLIPBOARD_BLOCKED);
     }
-    if (!ALLOWED_TYPES.includes(f.type)) {
-      setShotError('That file type is not supported. Use a PNG/JPG/WebP screenshot, a PDF, a text/CSV file, or a Word/Excel doc.');
-      return;
-    }
-    if (f.size > MAX_BYTES) {
-      setShotError(`That file is over ${formatBytes(MAX_BYTES)}.`);
-      return;
-    }
-    setShotError(null);
-    setShots((prev) => [...prev, { id: newId(), file: f, previewUrl: isImageFile(f) ? URL.createObjectURL(f) : undefined }]);
   };
 
   const removeShot = (id: string) => {
@@ -356,7 +451,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
               value={description}
               maxLength={TECHNICAL_MAX}
               onChange={(e) => setDescription(e.target.value)}
-              onPaste={(e) => acceptFile(Array.from(e.clipboardData.files)[0])}
+              onPaste={(e) => handlePaste(e.nativeEvent)}
               disabled={state === 'sending'}
               rows={5}
               placeholder="e.g. I clicked Generate and nothing happened for a few minutes."
@@ -392,14 +487,40 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
             ) : null}
 
             <div
+              role="button"
+              tabIndex={0}
+              aria-label="Add a screenshot or file. Click to choose a file, or paste one with Cmd+V."
+              onClick={openFilePicker}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault(); // Space would otherwise scroll the panel body
+                openFilePicker();
+              }}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
-                acceptFile(Array.from(e.dataTransfer.files)[0]);
+                acceptFiles(Array.from(e.dataTransfer.files));
               }}
               className={nudgeForShot ? 'rap-dropzone rap-dropzone--active' : 'rap-dropzone'}
               data-testid="report-shot-zone"
             >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPT}
+                tabIndex={-1}
+                aria-hidden="true"
+                className="rap-file-input"
+                data-testid="report-file-input"
+                // Without this the click we fire on the input bubbles back to
+                // the zone, which fires it again, forever.
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  acceptFiles(Array.from(e.target.files ?? []));
+                  e.target.value = ''; // so picking the same file twice still fires change
+                }}
+              />
               {shots.length > 0 ? (
                 <div className="rap-shots">
                   {shots.map((s) =>
@@ -408,7 +529,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                         <img src={s.previewUrl} alt="Screenshot to send" className="rap-shot-img" />
                         <button
                           type="button"
-                          onClick={() => removeShot(s.id)}
+                          onClick={(e) => { e.stopPropagation(); removeShot(s.id); }}
                           aria-label={`Remove ${s.file.name || 'screenshot'}`}
                           className="rap-shot-remove"
                         >
@@ -424,7 +545,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeShot(s.id)}
+                          onClick={(e) => { e.stopPropagation(); removeShot(s.id); }}
                           aria-label={`Remove ${s.file.name || 'file'}`}
                           className="rap-shot-remove"
                         >
@@ -445,12 +566,24 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                       : 'Add a screenshot or file (optional)'}
                 </p>
                 <p className="rap-hint">
-                  Press Cmd+Ctrl+Shift+4 (or PrtScn), then paste with Cmd+V. Drag this
-                  panel out of the way first if it&apos;s covering what you want to capture.
-                  You can also drop files here, screenshots, PDFs, text, Word or Excel,
-                  and add as many as you need before sending.
+                  Click to choose a file, drop one here, or paste a screenshot with
+                  Cmd+V (Ctrl+V on Windows). Screenshots, PDFs, text, Word or Excel,
+                  up to {MAX_SHOTS} files.
                 </p>
               </div>
+              {clipboardReadable ? (
+                <div className="rap-dropzone-actions">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); void pasteFromClipboard(); }}
+                    data-testid="report-clipboard-paste"
+                    className="rap-btn rap-btn--small"
+                  >
+                    <ClipboardPaste className="rap-icon rap-icon--tiny" />
+                    Paste from clipboard
+                  </button>
+                </div>
+              ) : null}
               {shotError ? <p className="rap-error">{shotError}</p> : null}
             </div>
           </>

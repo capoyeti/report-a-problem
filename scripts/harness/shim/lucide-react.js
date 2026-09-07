@@ -17,3 +17,4 @@ export const ImagePlus = icon('M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 
 export const Trash2 = icon('M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14');
 export const GripHorizontal = icon('M5 9h.01M12 9h.01M19 9h.01M5 15h.01M12 15h.01M19 15h.01');
 export const FileText = icon('M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M8 13h8M8 17h6');
+export const ClipboardPaste = icon('M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4M16 4h2a2 2 0 0 1 2 2v2M14 12h8v8h-8Z');

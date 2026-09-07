@@ -1,6 +1,6 @@
 {
   "name": "@visibleprojects/report-a-problem",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Report-a-problem panel plus server forwarders for error-triage-service.",
   "repository": "github:capoyeti/report-a-problem",
   "license": "MIT",
