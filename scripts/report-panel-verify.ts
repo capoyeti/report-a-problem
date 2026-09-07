@@ -1,7 +1,8 @@
 /**
  * Headed verification for the built panel. Serves scripts/harness plus dist/ on
  * 4321, mocks the two endpoints the panel talks to, then drives a real Chromium
- * through open, drag, describe, attach, send.
+ * through open, drag, describe, attach by drop, attach by file picker, attach by
+ * a panel-wide paste, keyboard focus on the drop zone, and send.
  *
  *   npx playwright install chromium   # once
  *   npm run verify:panel
@@ -11,12 +12,13 @@
  */
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
 const PORT = 4321;
 const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
-const OUT = path.join(ROOT, 'docs/visual-smoke/2026-09-05-panel');
+const OUT = path.join(ROOT, 'docs/visual-smoke/2026-09-07-attachments-ux');
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.map': 'application/json' };
 
@@ -111,7 +113,55 @@ async function main() {
     dt.items.add(new File([bytes], 'manual.png', { type: 'image/png' }));
     el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
   }, TINY_PNG);
-  await page.waitForTimeout(300);
+  const shots = page.locator('[data-testid="report-shot-zone"] .rap-shot');
+  await shots.nth(0).waitFor({ state: 'visible' });
+
+  // EXPERTTECH-243, cause 2: there was no file input at all, so a click on the
+  // zone did nothing. Feed the hidden input the way the OS picker would.
+  const picked = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rap-verify-')), 'picked-file.png');
+  fs.writeFileSync(picked, Buffer.from(TINY_PNG, 'base64'));
+  await page.getByTestId('report-file-input').setInputFiles(picked);
+  await shots.nth(1).waitFor({ state: 'visible' });
+  const pickerOk = (await shots.count()) === 2;
+  console.log(`file picker attached: ${pickerOk}`);
+  await page.screenshot({ path: path.join(OUT, 'picked.png') });
+
+  // Cause 1: paste only worked inside the textarea. Move focus off it, then
+  // fire the paste at the title so nothing editable is involved at all.
+  await page.locator('.rap-title').click();
+  const focusedTag = await page.evaluate((b64) => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], 'pasted.png', { type: 'image/png' }));
+    document.querySelector('.rap-title')!.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+    return document.activeElement?.tagName ?? 'NONE';
+  }, TINY_PNG);
+  console.log(`paste fired with focus on ${focusedTag}`);
+  await shots.nth(2).waitFor({ state: 'visible' });
+  const pasteOk = (await shots.count()) === 3;
+  console.log(`panel-wide paste attached: ${pasteOk}`);
+  await page.screenshot({ path: path.join(OUT, 'pasted.png') });
+
+  // Cause 3: the zone is a button now, so it has to take keyboard focus and
+  // show a ring when it does.
+  // Tab count is not fixed: the auto-capture consent adds two buttons between
+  // the textarea and the zone whenever html2canvas succeeded.
+  const zone = page.locator('[data-testid="report-shot-zone"]');
+  await page.getByTestId('report-text').focus();
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('Tab');
+    if (await zone.evaluate((el) => el === document.activeElement)) break;
+  }
+  const focus = await zone.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { focused: el === document.activeElement, visible: el.matches(':focus-visible'), outlineStyle: s.outlineStyle, outlineWidth: s.outlineWidth };
+  });
+  const focusOk = focus.focused && focus.visible && focus.outlineStyle === 'solid' && focus.outlineWidth !== '0px';
+  const pasteOkText = focusedTag !== 'TEXTAREA';
+  console.log(`drop zone focus ring: ${JSON.stringify(focus)}`);
+  await page.screenshot({ path: path.join(OUT, 'focus-ring.png') });
 
   await page.getByTestId('report-send').click();
   await page.getByTestId('report-sent').waitFor({ state: 'visible', timeout: 15000 });
@@ -122,11 +172,13 @@ async function main() {
   await browser.close();
   server.close();
 
+  fs.rmSync(path.dirname(picked), { recursive: true, force: true });
+
   const refOk = sentText.includes('REP-1');
   const styledOk = computed.position === 'fixed' && computed.borderRadius !== '0px' && computed.boxShadow !== 'none';
-  console.log(`refOk=${refOk} styledOk=${styledOk} moved=${moved}`);
+  console.log(`refOk=${refOk} styledOk=${styledOk} moved=${moved} pickerOk=${pickerOk} pasteOk=${pasteOk} pasteOffTextarea=${pasteOkText} focusOk=${focusOk}`);
   console.log(`screenshots in ${path.relative(ROOT, OUT)}`);
-  if (!(refOk && styledOk && moved)) {
+  if (!(refOk && styledOk && moved && pickerOk && pasteOk && pasteOkText && focusOk)) {
     console.log('VERIFY FAIL');
     process.exit(1);
   }
