@@ -15,7 +15,11 @@ and a per-app key, and nothing else.
 - `ReportProblemPanel`: a draggable, non-blocking floating panel. Captures the
   page as it looked when it opened (via `html2canvas`, DOM rasterization only,
   never a system screen capture) and offers it for the reporter to include or
-  discard. Takes screenshots, PDFs, text/CSV and Word/Excel files four ways:
+  discard. Modern colour functions (`oklch`, `lab`, `color()`), which Tailwind
+  v4 emits throughout its default palette, are rewritten to `rgb()` on
+  html2canvas's cloned document first, because html2canvas 1.4.1 throws on
+  them and would otherwise return no capture at all. If capture still fails
+  the panel says so rather than silently offering nothing. Takes screenshots, PDFs, text/CSV and Word/Excel files four ways:
   click the drop zone for the file picker, drop them on it, press Cmd+V (Ctrl+V)
   anywhere in the panel, or use its Paste from clipboard button. Up to 6 files of
   8MB each. Shows a human ticket reference on success.

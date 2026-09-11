@@ -7,6 +7,7 @@ import { needsScreenshot } from '../lib/needs-screenshot.js';
 import { clampPanelPosition, type Point } from '../lib/panel-position.js';
 import { uploadAttachment } from './upload.js';
 import { ALLOWED_TYPES, IMAGE_TYPES, buildAcceptAttribute, clipboardBlobToFile, firstAllowedImageType } from './attachments.js';
+import { createCanvasColorConverter, normalizeModernColors } from '../lib/modern-colors.js';
 
 // Marks the panel's own DOM subtree so the auto-capture (html2canvas over
 // document.body) can exclude it. The shot must show what was BEHIND the
@@ -16,6 +17,7 @@ const MAX_SHOTS = 6;
 const MAX_BYTES = 8 * 1024 * 1024;
 const ACCEPT = buildAcceptAttribute();
 const CLIPBOARD_BLOCKED = 'Your browser blocked clipboard access; press Cmd+V (Ctrl+V) instead or choose a file.';
+const CAPTURE_FAILED = 'We could not capture this screen automatically. Paste or drop a screenshot instead.';
 
 const DEFAULT_ENDPOINTS = { report: '/api/error-report', attachment: '/api/error-report/attachment' };
 
@@ -238,9 +240,16 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
     (async () => {
       try {
         const { default: html2canvas } = await import('html2canvas');
+        const convert = createCanvasColorConverter();
         const canvas = await html2canvas(document.body, {
           logging: false,
           useCORS: true,
+          // html2canvas cannot parse oklch/lab/color(), which is Tailwind v4's
+          // entire default palette. Rewrite them on its own clone before it
+          // reads any styles; the live page is untouched.
+          onclone: (cloned) => {
+            normalizeModernColors(cloned, convert);
+          },
           ignoreElements: (el) =>
             el instanceof Element && (el.hasAttribute(PANEL_ROOT_ATTR) || !!el.closest(`[${PANEL_ROOT_ATTR}]`)),
         });
@@ -251,8 +260,11 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
           setAutoShot({ id: 'auto', file, previewUrl: URL.createObjectURL(blob) });
         }, 'image/png');
       } catch {
-        // DOM capture can fail (canvas taint from cross-origin content, etc).
-        // The manual paste/drop path below still works, never block on this.
+        // Capture can still fail: canvas taint from cross-origin content, or a
+        // colour we could not convert. Say so. Swallowing this is what let a
+        // Tailwind v4 app ship for four days with no auto-capture and no signal
+        // to anyone (CLEVERCONN-66).
+        if (!cancelled) setShotError(CAPTURE_FAILED);
       }
     })();
     return () => { cancelled = true; };
