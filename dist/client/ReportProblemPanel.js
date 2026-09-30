@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal, FileText, ClipboardPaste } from 'lucide-react';
 import { buildUserReportPayload, TECHNICAL_MAX } from '../lib/report-payload.js';
 import { needsScreenshot } from '../lib/needs-screenshot.js';
-import { clampPanelPosition } from '../lib/panel-position.js';
+import { clampPanelPosition, startsDrag } from '../lib/panel-position.js';
 import { uploadAttachment } from './upload.js';
 import { ALLOWED_TYPES, IMAGE_TYPES, buildAcceptAttribute, clipboardBlobToFile, firstAllowedImageType } from './attachments.js';
 import { createCanvasColorConverter, normalizeModernColors } from '../lib/modern-colors.js';
@@ -301,7 +301,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
     // whether it is still CSS-centered or already pixel-positioned from a prior
     // drag), then clamp every move so a sliver always stays grabbable.
     const onHeaderPointerDown = (e) => {
-        if (!panelRef.current)
+        if (!panelRef.current || !startsDrag(e.target))
             return;
         const rect = panelRef.current.getBoundingClientRect();
         dragRef.current = { startX: e.clientX, startY: e.clientY, originX: rect.left, originY: rect.top };
@@ -321,7 +321,9 @@ export function ReportProblemPanel({ open, onClose, endpoints }) {
     const onHeaderPointerUp = (e) => {
         dragRef.current = null;
         setDragging(false);
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        const handle = e.currentTarget;
+        if (handle.hasPointerCapture(e.pointerId))
+            handle.releasePointerCapture(e.pointerId);
     };
     const submit = async () => {
         // Cheap guard first: never upload files on an empty report. The Send button
