@@ -15,3 +15,9 @@ export interface Size {
  * reload, which loses a half-written report.
  */
 export declare function clampPanelPosition(pos: Point, panel: Size, viewport: Size): Point;
+/**
+ * Whether a pointerdown on the drag handle should start a drag. Controls inside
+ * the handle are excluded: capturing the pointer for a drag retargets pointerup
+ * to the handle, and the Close button then never gets its click.
+ */
+export declare function startsDrag(target: EventTarget | null): boolean;

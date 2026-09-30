@@ -16,3 +16,13 @@ export function clampPanelPosition(pos, panel, viewport) {
         y: Math.min(Math.max(pos.y, minY), maxY),
     };
 }
+/**
+ * Whether a pointerdown on the drag handle should start a drag. Controls inside
+ * the handle are excluded: capturing the pointer for a drag retargets pointerup
+ * to the handle, and the Close button then never gets its click.
+ */
+export function startsDrag(target) {
+    if (typeof Element === 'undefined' || !(target instanceof Element))
+        return false;
+    return !target.closest('button, a, input, textarea, select, [role="button"]');
+}
