@@ -7,22 +7,27 @@ interface Ctx { open: () => void; close: () => void; isOpen: boolean; enabled: b
 
 const ReportProblemContext = createContext<Ctx>({ open: () => {}, close: () => {}, isOpen: false, enabled: false });
 
-/**
- * Owns the open/close state and mounts the panel exactly once, so a trigger
- * anywhere in the tree is a hook call rather than another copy of the same forty
- * lines of state. `enabled` is whatever the consumer decides (a flag, a role, an
- * environment check); when false the panel is not rendered at all, so its
- * html2canvas import never loads.
- */
-export function ReportProblemProvider({ enabled = true, endpoints, children }: { enabled?: boolean; endpoints?: ReportProblemPanelProps['endpoints']; children: ReactNode }) {
+export interface ReportProblemProviderProps {
+  enabled?: boolean;
+  endpoints?: ReportProblemPanelProps['endpoints'];
+  availability?: ReportProblemPanelProps['availability'];
+  children: ReactNode;
+}
+
+export function ReportProblemProvider({ enabled = true, endpoints, availability, children }: ReportProblemProviderProps) {
   const [isOpen, setOpen] = useState(false);
   const open = useCallback(() => { if (enabled) setOpen(true); }, [enabled]);
   const close = useCallback(() => setOpen(false), []);
   const value = useMemo(() => ({ open, close, isOpen, enabled }), [open, close, isOpen, enabled]);
+  const panelAvailability = enabled ? availability : {
+    ...availability,
+    canSubmit: false,
+    message: availability?.message ?? 'Reporting has been turned off for this workspace. Copy your description before closing.',
+  };
   return (
     <ReportProblemContext.Provider value={value}>
       {children}
-      {enabled ? <ReportProblemPanel open={isOpen} onClose={close} endpoints={endpoints} /> : null}
+      {isOpen ? <ReportProblemPanel open onClose={close} endpoints={endpoints} availability={panelAvailability} /> : null}
     </ReportProblemContext.Provider>
   );
 }

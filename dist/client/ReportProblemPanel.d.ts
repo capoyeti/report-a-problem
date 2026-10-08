@@ -1,7 +1,10 @@
-/**
- * `endpoints` points at the consumer's own routes, not at the service. Both
- * default to the paths the README wires up, so most apps never pass it.
- */
+export interface ReportProblemAvailability {
+    canSubmit: boolean;
+    message?: string;
+    onRetry?: () => void;
+    retrying?: boolean;
+}
+/** Endpoints point at the consumer's own routes, not at the service. */
 export interface ReportProblemPanelProps {
     open: boolean;
     onClose: () => void;
@@ -9,6 +12,7 @@ export interface ReportProblemPanelProps {
         report?: string;
         attachment?: string;
     };
+    availability?: ReportProblemAvailability;
 }
 /**
  * Proactive "Report a problem" panel. Unlike a reactive error toast (which only
@@ -24,6 +28,6 @@ export interface ReportProblemPanelProps {
  *
  * Controlled component: parent owns `open` and resets on `onClose`.
  */
-export declare function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPanelProps): import("react").JSX.Element | null;
+export declare function ReportProblemPanel({ open, onClose, endpoints, availability }: ReportProblemPanelProps): import("react").JSX.Element | null;
 /** Default as well as named, because `React.lazy` accepts only a default export. */
 export default ReportProblemPanel;

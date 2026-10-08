@@ -12,7 +12,13 @@ function hasSession(s) {
     return !('error' in s) || s.error === undefined;
 }
 async function readJson(req) {
-    const raw = await req.text();
+    let raw;
+    try {
+        raw = await req.text();
+    }
+    catch {
+        return { ok: false, res: json(400, { ok: false, error: 'invalid_body' }) };
+    }
     // Measure the bytes we actually read; Content-Length is caller-supplied and a
     // body can be chunked without one at all.
     if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES)
@@ -58,8 +64,21 @@ export function createReportProblemHandlers(cfg) {
     async function guard(req) {
         if (!isSameOrigin(req))
             return { ok: false, res: json(403, { ok: false, error: 'bad_origin' }) };
-        const s = await cfg.verifySession();
-        if (!hasSession(s) || !s.user?.id)
+        let s;
+        try {
+            s = await cfg.verifySession();
+        }
+        catch {
+            return { ok: false, res: json(503, { ok: false, error: 'service_unavailable' }) };
+        }
+        if (!s || typeof s !== 'object')
+            return { ok: false, res: json(401, { ok: false, error: 'unauthorized' }) };
+        if (!hasSession(s)) {
+            const status = s.status === 403 || s.status === 503 ? s.status : 401;
+            const error = status === 403 ? 'reporting_disabled' : status === 503 ? 'service_unavailable' : 'unauthorized';
+            return { ok: false, res: json(status, { ok: false, error }) };
+        }
+        if (typeof s.user?.id !== 'string' || !s.user.id.trim())
             return { ok: false, res: json(401, { ok: false, error: 'unauthorized' }) };
         return { ok: true, session: s };
     }
@@ -78,9 +97,12 @@ export function createReportProblemHandlers(cfg) {
                 return r.res;
             const b = r.body;
             const submissionId = str(b.submission_id, 64);
-            const attachmentIds = (Array.isArray(b.attachment_ids) ? b.attachment_ids : [])
-                .filter((x) => typeof x === 'string' && UUID_RE.test(x))
-                .slice(0, MAX_ATTACHMENTS);
+            if (b.attachment_ids !== undefined && (!Array.isArray(b.attachment_ids)
+                || b.attachment_ids.length > MAX_ATTACHMENTS
+                || b.attachment_ids.some((id) => typeof id !== 'string' || !UUID_RE.test(id)))) {
+                return json(400, { ok: false, error: 'invalid_attachment_ids' });
+            }
+            const attachmentIds = (b.attachment_ids ?? []);
             // Whitelist client diagnostics FIRST, then bind identity from the session.
             // Never spread client input over identity.
             const payload = {
@@ -102,16 +124,22 @@ export function createReportProblemHandlers(cfg) {
                 return json(429, { ok: false, error: 'rate_limited' });
             if (!res.ok)
                 return json(502, { ok: false, error: 'service_error' });
-            const svc = (await res.json().catch(() => ({})));
-            if (!svc.ok)
+            const svc = obj(await res.json().catch(() => null));
+            if (svc.filed === false && ['app_disabled', 'tenant_disabled', 'tenant_not_allowed', 'tenant_denied'].includes(String(svc.reason))) {
+                return json(403, { ok: false, error: 'reporting_disabled' });
+            }
+            const proof = (v) => typeof v === 'string' && v.trim().length > 0;
+            if (svc.ok !== true || svc.filed !== true || !(proof(svc.ref) || proof(svc.report_id))
+                || (svc.ref != null && !proof(svc.ref)) || (svc.report_id != null && !proof(svc.report_id))) {
                 return json(502, { ok: false, error: 'service_error' });
+            }
             return json(200, {
                 ok: true,
                 ref: svc.ref ?? svc.report_id ?? null,
                 reportId: svc.report_id ?? null,
-                delivered: svc.delivered ?? {},
+                delivered: Object.fromEntries(['db', 'email', 'whatsapp', 'plane', 'reporter_copy', 'attachments'].map((key) => [key, obj(svc.delivered)[key] === true])),
                 duplicate: svc.duplicate === true,
-                filed: svc.filed !== false,
+                filed: true,
             });
         },
         async attachment(req) {
@@ -129,11 +157,21 @@ export function createReportProblemHandlers(cfg) {
             const res = await callService(cfg, '/api/v1/attachments/sign', { reporter: { id: id.reporter.id }, tenant_id: id.tenant_id, filename: str(b.filename, 255), mime: b.mime, size_bytes: size }, 5000);
             if (res === 'unavailable')
                 return json(502, { ok: false, error: 'service_unavailable' });
-            // Pass the service's own status and body straight back. The service owns
-            // the mime allowlist and size cap, so its 413 or 415 is the message the
-            // panel should show; re-wrapping it here would only lose the reason.
-            const text = await res.text();
-            return new Response(text, { status: res.status, headers: { 'content-type': 'application/json' } });
+            if (res.status === 429)
+                return json(429, { ok: false, error: 'rate_limited' });
+            if (!res.ok) {
+                const status = [401, 403, 413, 415, 503].includes(res.status) ? res.status : 502;
+                const error = status === 401 ? 'unauthorized' : status === 403 ? 'reporting_disabled'
+                    : status === 413 ? 'file_too_large' : status === 415 ? 'unsupported_type'
+                        : status === 503 ? 'service_unavailable' : 'service_error';
+                return json(status, { ok: false, error });
+            }
+            const svc = obj(await res.json().catch(() => null));
+            if (svc.ok !== true || typeof svc.attachment_id !== 'string' || !UUID_RE.test(svc.attachment_id)
+                || typeof svc.upload_url !== 'string' || !svc.upload_url.trim()) {
+                return json(502, { ok: false, error: 'service_error' });
+            }
+            return json(200, { ok: true, attachment_id: svc.attachment_id, upload_url: svc.upload_url });
         },
     };
 }
