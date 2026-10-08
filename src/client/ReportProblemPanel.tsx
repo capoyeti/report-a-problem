@@ -5,7 +5,7 @@ import { X, Send, CheckCircle2, Loader2, Bug, ImagePlus, Trash2, GripHorizontal,
 import { buildUserReportPayload, TECHNICAL_MAX, type ReportContext } from '../lib/report-payload.js';
 import { needsScreenshot } from '../lib/needs-screenshot.js';
 import { clampPanelPosition, startsDrag, type Point } from '../lib/panel-position.js';
-import { uploadAttachment } from './upload.js';
+import { uploadAttachmentDetailed, withRequestDeadline, REPORT_TIMEOUT_MS } from './upload.js';
 import { ALLOWED_TYPES, IMAGE_TYPES, buildAcceptAttribute, clipboardBlobToFile, firstAllowedImageType } from './attachments.js';
 import { createCanvasColorConverter, normalizeModernColors } from '../lib/modern-colors.js';
 
@@ -21,14 +21,19 @@ const CAPTURE_FAILED = 'We could not capture this screen automatically. Paste or
 
 const DEFAULT_ENDPOINTS = { report: '/api/error-report', attachment: '/api/error-report/attachment' };
 
-/**
- * `endpoints` points at the consumer's own routes, not at the service. Both
- * default to the paths the README wires up, so most apps never pass it.
- */
+export interface ReportProblemAvailability {
+  canSubmit: boolean;
+  message?: string;
+  onRetry?: () => void;
+  retrying?: boolean;
+}
+
+/** Endpoints point at the consumer's own routes, not at the service. */
 export interface ReportProblemPanelProps {
   open: boolean;
   onClose: () => void;
   endpoints?: { report?: string; attachment?: string };
+  availability?: ReportProblemAvailability;
 }
 
 function isImageFile(file: File): boolean {
@@ -94,7 +99,7 @@ function newId(): string {
  *
  * Controlled component: parent owns `open` and resets on `onClose`.
  */
-export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPanelProps) {
+export function ReportProblemPanel({ open, onClose, endpoints, availability }: ReportProblemPanelProps) {
   const report = endpoints?.report ?? DEFAULT_ENDPOINTS.report;
   const attachmentEndpoint = endpoints?.attachment ?? DEFAULT_ENDPOINTS.attachment;
 
@@ -123,10 +128,43 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   // One id per open, reused across retries so the service can settle a
   // duplicate rather than filing two reports for one problem.
   const submissionIdRef = useRef<string | null>(null);
+  const inFlight = useRef(false);
+  const lifetime = useRef<AbortController | null>(null);
+  const uploadedIds = useRef(new Map<string, string>());
+  const attempted = useRef<{ endpoint: string; body: string; ambiguous: boolean } | null>(null);
+  const [unresolved, setUnresolved] = useState(false);
+  const [failedFiles, setFailedFiles] = useState(false);
+  const latestAvailability = useRef(availability);
+  latestAvailability.current = availability;
+  const resources = useRef({ shots, autoShot });
+  resources.current = { shots, autoShot };
+  const locked = state === 'sending' || unresolved;
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    lifetime.current = controller;
+    inFlight.current = false;
+    attempted.current = null;
+    uploadedIds.current.clear();
+    setDescription(''); setShots([]); setAutoShot(null); setPosition(null);
+    setState('idle'); setUnresolved(false); setFailedFiles(false);
+    setErrorHint(null); setShotError(null); setReference(null); setEmailedCopy(false);
+    return () => {
+      controller.abort();
+      revokeShots(resources.current.shots);
+      if (resources.current.autoShot?.previewUrl) URL.revokeObjectURL(resources.current.autoShot.previewUrl);
+    };
+  }, [open]);
 
   const revokeShots = (list: Shot[]) => list.forEach((s) => { if (s.previewUrl) URL.revokeObjectURL(s.previewUrl); });
 
   const close = useCallback(() => {
+    if (attempted.current && !window.confirm('This report may already have been received. Closing clears your local draft, but does not cancel delivery. Close anyway?')) return;
+    lifetime.current?.abort();
+    attempted.current = null;
+    uploadedIds.current.clear();
+    setUnresolved(false);
     // Reset so the next open starts clean.
     setDescription('');
     setState('idle');
@@ -146,7 +184,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   // that lands at least one file still clears an earlier error.
   const acceptFiles = useCallback(
     (files: File[]) => {
-      if (!files.length) return;
+      if (!files.length || inFlight.current || attempted.current || lifetime.current?.signal.aborted) return;
       const room = MAX_SHOTS - shots.length;
       if (room <= 0) {
         setShotError(`You can attach up to ${MAX_SHOTS} files.`);
@@ -272,31 +310,37 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
 
   if (!open) return null;
 
-  const openFilePicker = () => fileInputRef.current?.click();
+  const openFilePicker = () => { if (!locked) fileInputRef.current?.click(); };
 
   // The explicit button exists because right-clicking a div offers no Paste,
   // and a reporter who cannot find Cmd+V has no other way in. Permission can
   // be refused (or the API can be absent behind an insecure origin), so every
   // failure ends as a hint rather than an exception.
   const pasteFromClipboard = async () => {
+    if (locked) return;
+    const scope = lifetime.current;
     try {
       const items = await navigator.clipboard.read();
       for (const item of items) {
         const type = firstAllowedImageType(item.types);
         if (!type) continue;
         const file = clipboardBlobToFile(await item.getType(type));
+        if (scope?.signal.aborted || scope !== lifetime.current || attempted.current || inFlight.current) return;
         if (file) {
           acceptFile(file);
           return;
         }
       }
+      if (scope?.signal.aborted || scope !== lifetime.current) return;
       setShotError('There was no image on your clipboard. Take a screenshot first, or choose a file.');
     } catch {
-      setShotError(CLIPBOARD_BLOCKED);
+      if (!scope?.signal.aborted && scope === lifetime.current) setShotError(CLIPBOARD_BLOCKED);
     }
   };
 
   const removeShot = (id: string) => {
+    if (locked || inFlight.current || attempted.current) return;
+    uploadedIds.current.delete(id);
     setShots((prev) => {
       const target = prev.find((s) => s.id === id);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
@@ -305,7 +349,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   };
 
   const includeAutoShot = () => {
-    if (!autoShot) return;
+    if (!autoShot || locked || inFlight.current || attempted.current) return;
     if (shots.length >= MAX_SHOTS) {
       setShotError(`You can attach up to ${MAX_SHOTS} files.`);
       return;
@@ -315,6 +359,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
   };
 
   const discardAutoShot = () => {
+    if (locked) return;
     if (autoShot?.previewUrl) URL.revokeObjectURL(autoShot.previewUrl);
     setAutoShot(null);
   };
@@ -349,52 +394,83 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
     if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
   };
 
+  const canSubmit = () => latestAvailability.current?.canSubmit !== false;
+
   const submit = async () => {
-    // Cheap guard first: never upload files on an empty report. The Send button
-    // is disabled when the text is empty, so this is belt-and-braces rather
-    // than a reachable path.
-    if (!description.trim()) return;
-
-    setState('sending');
-    setErrorHint(null);
-
-    const ctx = collectReportContext();
-
-    // Sign and upload every accumulated attachment first so their ids can ride
-    // in the report body. A failed upload never blocks the report, it just
-    // drops that one file rather than losing the whole report.
-    const attachmentIds = shots.length
-      ? (await Promise.all(shots.map((s) => uploadAttachment(attachmentEndpoint, s.file)))).filter((id): id is string => !!id)
-      : [];
-
-    const payload = buildUserReportPayload(description, ctx);
-    if (!payload) { setState('idle'); return; }
+    if (!description.trim() || inFlight.current || !canSubmit() || state === 'sent') return;
+    const scope = lifetime.current;
+    if (!scope || scope.signal.aborted) return;
+    inFlight.current = true;
+    setState('sending'); setErrorHint(null);
+    const active = () => !scope.signal.aborted && lifetime.current === scope;
     try {
-      const res = await fetch(report, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, submission_id: submissionIdRef.current, attachment_ids: attachmentIds }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok && body?.ok) {
-        setReference(body.ref ?? body.reportId ?? null);
-        // Only promise an email copy when the service actually sent one. The
-        // reporter-copy sink is best-effort and can be false (mail down, etc).
-        setEmailedCopy(body?.delivered?.reporter_copy === true);
-        setState('sent');
-        return;
+      if (!attempted.current) {
+        const payload = buildUserReportPayload(description, collectReportContext());
+        if (!payload) { setState('idle'); return; }
+        const pending = shots.filter((shot) => !uploadedIds.current.has(shot.id));
+        let cursor = 0;
+        let failure = false;
+        let authorityHint: string | null = null;
+        await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
+          while (cursor < pending.length && active()) {
+            const shot = pending[cursor++];
+            const result = await uploadAttachmentDetailed(attachmentEndpoint, shot.file, fetch, scope.signal);
+            if (!active()) return;
+            if (result.ok) uploadedIds.current.set(shot.id, result.attachmentId);
+            else {
+              failure = true;
+              if (result.error === 'reporting_disabled') authorityHint = 'Reporting is not enabled for this workspace. Your description is still here.';
+              if (result.error === 'unauthorized') authorityHint = 'Please sign in again before sending. Your description is still here.';
+            }
+          }
+        }));
+        if (!active()) return;
+        setFailedFiles(failure);
+        if (failure) {
+          setShotError("Some attachments couldn't be uploaded. Retry them or remove them before sending.");
+          setErrorHint(authorityHint); setState('error'); return;
+        }
+        setShotError(null);
+        if (!canSubmit()) { setState('idle'); return; }
+        const attachmentIds = shots.map((shot) => uploadedIds.current.get(shot.id)!);
+        attempted.current = { endpoint: report, ambiguous: false, body: JSON.stringify({ ...payload, submission_id: submissionIdRef.current, attachment_ids: attachmentIds }) };
+        setUnresolved(true);
       }
-      // Friendly, internal-free messaging. Rate-limit gets a specific hint; all
-      // other failures get a generic retry prompt.
-      setErrorHint(
-        res.status === 429
-          ? "You've sent a few reports just now. Give it a minute and try again."
-          : "We couldn't send that just now. Please try again."
-      );
+      const attempt = attempted.current;
+      const { res, body } = await withRequestDeadline(REPORT_TIMEOUT_MS, scope.signal, async (signal) => {
+        const res = await fetch(attempt.endpoint, {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: attempt.body, signal,
+        });
+        const body = await res.json().catch(() => null);
+        return { res, body };
+      });
+      if (!active()) return;
+      const proof = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
+      if (res.ok && body?.ok === true && body.filed === true && (proof(body.ref) || proof(body.reportId))
+        && (body.ref == null || proof(body.ref)) && (body.reportId == null || proof(body.reportId))) {
+        setReference(body.ref ?? body.reportId);
+        setEmailedCopy(body?.delivered?.reporter_copy === true);
+        attempted.current = null; setUnresolved(false); setState('sent'); return;
+      }
+      const definitive = (res.status === 401 && body?.error === 'unauthorized')
+        || (res.status === 403 && body?.error === 'reporting_disabled')
+        || (res.status === 503 && body?.error === 'service_unavailable')
+        || (res.status === 429 && body?.error === 'rate_limited');
+      if (definitive && !attempt.ambiguous) { attempted.current = null; setUnresolved(false); }
+      else attempt.ambiguous = true;
+      setErrorHint(res.status === 429 ? "You've sent a few reports just now. Give it a minute and try again."
+        : res.status === 403 && body?.error === 'reporting_disabled' ? 'Reporting is not enabled for this workspace. Your description is still here.'
+        : res.status === 401 ? 'Please sign in again before sending. Your description is still here.'
+        : "We couldn't send that just now. Your description is still here. Please try again.");
       setState('error');
     } catch {
-      setErrorHint("We couldn't send that just now. Please try again.");
-      setState('error');
+      if (active()) {
+        if (attempted.current) attempted.current.ambiguous = true;
+        setErrorHint("We couldn't send that just now. Your description is still here. Please try again.");
+        setState('error');
+      }
+    } finally {
+      if (active()) inFlight.current = false;
     }
   };
 
@@ -433,6 +509,14 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
       </div>
 
       <div className="rap-body">
+        {state !== 'sent' && (availability?.message || availability?.canSubmit === false) ? (
+          <div className="rap-consent" role="status" aria-live="polite" data-testid="report-availability">
+            <p className="rap-hint">{availability.message ?? 'Reporting is temporarily unavailable. Your description will stay here while you retry.'}</p>
+            {availability.onRetry ? <button type="button" className="rap-btn rap-btn--small" onClick={availability.onRetry} disabled={availability.retrying === true}>
+              {availability.retrying ? 'Retrying…' : 'Retry connection'}
+            </button> : null}
+          </div>
+        ) : null}
         {state === 'sent' ? (
           <div className="rap-success" data-testid="report-sent">
             <CheckCircle2 className="rap-icon" />
@@ -452,6 +536,8 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
           </div>
         ) : (
           <>
+            <p className="rap-hint">Your draft stays here while this panel is open. Closing, reloading, signing out or switching accounts or workspaces clears it.</p>
+            {unresolved ? <p className="rap-hint" role="status">This report may already have been received. Retry sends the same report; editing is locked until its result is confirmed.</p> : null}
             <label htmlFor="rap-report-text" className="rap-label">
               Tell us what went wrong. The team gets this with the page you were
               on so they can look into it. Drag this panel by its title bar if
@@ -465,7 +551,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
               maxLength={TECHNICAL_MAX}
               onChange={(e) => setDescription(e.target.value)}
               onPaste={(e) => handlePaste(e.nativeEvent)}
-              disabled={state === 'sending'}
+              disabled={locked}
               rows={5}
               placeholder="e.g. I clicked Generate and nothing happened for a few minutes."
               className="rap-textarea"
@@ -489,10 +575,10 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                   <p className="rap-hint">Only visible if you choose to include it.</p>
                 </div>
                 <div className="rap-consent-actions">
-                  <button type="button" onClick={includeAutoShot} data-testid="report-auto-shot-include" className="rap-btn rap-btn--primary rap-btn--small">
+                  <button type="button" disabled={locked} onClick={includeAutoShot} data-testid="report-auto-shot-include" className="rap-btn rap-btn--primary rap-btn--small">
                     Include
                   </button>
-                  <button type="button" onClick={discardAutoShot} data-testid="report-auto-shot-discard" className="rap-btn rap-btn--small">
+                  <button type="button" disabled={locked} onClick={discardAutoShot} data-testid="report-auto-shot-discard" className="rap-btn rap-btn--small">
                     Discard
                   </button>
                 </div>
@@ -501,7 +587,8 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
 
             <div
               role="button"
-              tabIndex={0}
+              tabIndex={locked ? -1 : 0}
+              aria-disabled={locked}
               aria-label="Add a screenshot or file. Click to choose a file, or paste one with Cmd+V."
               onClick={openFilePicker}
               onKeyDown={(e) => {
@@ -520,14 +607,13 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
               <input
                 ref={fileInputRef}
                 type="file"
+                disabled={locked}
                 multiple
                 accept={ACCEPT}
                 tabIndex={-1}
                 aria-hidden="true"
                 className="rap-file-input"
                 data-testid="report-file-input"
-                // Without this the click we fire on the input bubbles back to
-                // the zone, which fires it again, forever.
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   acceptFiles(Array.from(e.target.files ?? []));
@@ -542,6 +628,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                         <img src={s.previewUrl} alt="Screenshot to send" className="rap-shot-img" />
                         <button
                           type="button"
+                          disabled={locked}
                           onClick={(e) => { e.stopPropagation(); removeShot(s.id); }}
                           aria-label={`Remove ${s.file.name || 'screenshot'}`}
                           className="rap-shot-remove"
@@ -558,6 +645,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                         </div>
                         <button
                           type="button"
+                          disabled={locked}
                           onClick={(e) => { e.stopPropagation(); removeShot(s.id); }}
                           aria-label={`Remove ${s.file.name || 'file'}`}
                           className="rap-shot-remove"
@@ -589,6 +677,7 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); void pasteFromClipboard(); }}
+                    disabled={locked}
                     data-testid="report-clipboard-paste"
                     className="rap-btn rap-btn--small"
                   >
@@ -613,9 +702,9 @@ export function ReportProblemPanel({ open, onClose, endpoints }: ReportProblemPa
             <button onClick={close} disabled={state === 'sending'} className="rap-btn">
               Cancel
             </button>
-            <button onClick={submit} disabled={state === 'sending' || trimmedEmpty} data-testid="report-send" className="rap-btn rap-btn--primary">
+            <button onClick={submit} disabled={state === 'sending' || trimmedEmpty || availability?.canSubmit === false} data-testid="report-send" className="rap-btn rap-btn--primary">
               {state === 'sending' ? <Loader2 className="rap-icon rap-icon--spin" /> : <Send className="rap-icon" />}
-              {state === 'sending' ? 'Sending…' : 'Send'}
+              {state === 'sending' ? 'Sending…' : unresolved ? 'Retry same report' : failedFiles ? 'Retry attachments and send' : 'Send'}
             </button>
           </>
         )}
