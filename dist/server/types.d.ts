@@ -18,12 +18,14 @@ export interface ReportProblemSession {
  * can point two deployments at different services, or swap a key, without a
  * rebuild of this package.
  */
+export interface ReportProblemSessionFailure {
+    error: unknown;
+    status?: 401 | 403 | 503;
+}
 export interface ReportProblemHandlerConfig {
     serviceUrl: string;
     serviceKey: string;
-    verifySession: () => Promise<ReportProblemSession | {
-        error: unknown;
-    }>;
+    verifySession: () => Promise<ReportProblemSession | ReportProblemSessionFailure>;
     timeoutMs?: number;
     fetch?: typeof fetch;
 }
