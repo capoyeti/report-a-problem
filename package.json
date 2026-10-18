@@ -16,6 +16,10 @@
     "./review-contract": {
       "types": "./dist/review/contract.d.ts",
       "default": "./dist/review/contract.js"
+    },
+    "./review": {
+      "types": "./dist/review/index.d.ts",
+      "default": "./dist/review/index.js"
     }
   },
   "files": [
@@ -23,9 +27,10 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc && cp src/style.css dist/style.css",
+    "build": "tsc && node scripts/build-review-renderer.mjs && cp src/style.css dist/style.css",
     "test": "vitest run",
     "verify:panel": "npx tsx scripts/report-panel-verify.ts",
+    "verify:review": "tsx scripts/review-spike-verify.ts",
     "smoke:tarball": "bash scripts/smoke-tarball.sh"
   },
   "peerDependencies": {
