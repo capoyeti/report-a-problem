@@ -48,6 +48,13 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
   const drafts = new Map<string, Record<string, string>>();
   const pending = new Map<string, { body: string; key: string; path: string }>();
   const expanded = new Set<string>();
+  type CopyState = { state: 'copying' | 'copied' | 'fallback'; link: string };
+  const copies = new Map<string, CopyState>();
+  const copyViews = new Map<string, Set<(value: CopyState, focus: boolean) => void>>();
+  function publishCopy(id: string, value: CopyState) {
+    if (stopped) return;
+    copies.set(id, value); copyViews.get(id)?.forEach(view => view(value, value.state === 'fallback'));
+  }
   function restorePending(id: string) {
     if (pending.has(id)) return;
     try {
@@ -93,6 +100,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
     const id = String(comment.id);
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || stopped) return;
     restorePending(id);
+    let removeCopyView = () => {};
     let disposed = false, snapshot: Snapshot | null = null, session: ReviewSession | null = null, busy = false;
     const root = node('details'); root.className = 'an-finding';
     root.addEventListener('click', e => e.stopPropagation());
@@ -126,7 +134,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       let op = pending.get(id);
       // A lost acknowledgement must retry the exact operation before a new one.
       if (!op) { op = { key: cfg.host.crypto.randomUUID(), body: JSON.stringify({ expectedVersion: snapshot.finding.version, ...payload }), path }; keepPending(id, op); }
-      busy = true; status.textContent = 'Sharing this change...';
+      copies.delete(id); busy = true; status.textContent = 'Sharing this change...';
       content.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('button,input,textarea,select').forEach(b => { b.disabled = true; });
       try {
         const response = await cfg.request(`${cfg.gateway}/v1/reviews/${cfg.scope.campaignId}/threads/${id}/${op.path}`, {
@@ -166,7 +174,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       const fields = { ...(loadDraft(id) ?? {}) };
       const creator = comment.authorId === cfg.actorId;
       const owner = f.owner_id === cfg.actorId;
-      content.replaceChildren();
+      removeCopyView(); content.replaceChildren();
       status.textContent = labels[f.state] ?? 'Review in progress';
       if (f.reason) content.append(node('p', f.reason));
       const threadLink = cfg.returnPath && /^\/[A-Za-z0-9/_-]+$/.test(cfg.returnPath) && /^[a-f0-9-]{36}$/i.test(f.thread_id)
@@ -176,15 +184,25 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
         const fallback = node('input'); fallback.value = threadLink; fallback.readOnly = true; fallback.hidden = true;
         fallback.setAttribute('aria-label', 'Thread link to copy');
         const copy = button('Copy link to this thread', () => {
-          status.textContent = 'Copying the thread link...'; copy.disabled = true;
+          publishCopy(id, { state: 'copying', link: threadLink });
           let timer: ReturnType<typeof setTimeout>;
           const clipboard = cfg.host.navigator.clipboard;
           const write = Promise.resolve().then(() => { if (!clipboard?.writeText) throw new Error('Clipboard unavailable'); return clipboard.writeText(threadLink); });
           Promise.race([write, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Clipboard permission required')), 2000); })])
-            .then(() => { if (alive()) status.textContent = 'Thread link copied. Access is checked when it is opened.'; }, () => {
-              if (alive()) { fallback.hidden = false; fallback.focus(); fallback.select(); status.textContent = 'Select and copy the thread link below, or choose Open this thread link.'; }
-            }).finally(() => { clearTimeout(timer); if (alive()) copy.disabled = false; });
+            .then(() => publishCopy(id, { state: 'copied', link: threadLink }), () => publishCopy(id, { state: 'fallback', link: threadLink }))
+            .finally(() => clearTimeout(timer));
         });
+        const updateCopy = (value: CopyState, focus: boolean) => {
+          if (!alive() || value.link !== threadLink) return;
+          copy.disabled = value.state === 'copying'; fallback.hidden = value.state !== 'fallback';
+          status.textContent = value.state === 'copying' ? 'Copying the thread link...'
+            : value.state === 'copied' ? 'Thread link copied. Access is checked when it is opened.'
+            : 'Select and copy the thread link below, or choose Open this thread link.';
+          if (focus && value.state === 'fallback') { fallback.focus(); fallback.select(); }
+        };
+        const views = copyViews.get(id) ?? new Set(); views.add(updateCopy); copyViews.set(id, views);
+        removeCopyView = () => { views.delete(updateCopy); if (!views.size) copyViews.delete(id); };
+        const savedCopy = copies.get(id); if (savedCopy) updateCopy(savedCopy, false);
         content.append(copy, fallback);
       }
       if (snapshot.delivery) {
@@ -299,7 +317,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
     }
     root.addEventListener('toggle', () => { if (root.open) expanded.add(id); else expanded.delete(id); if (root.open && !snapshot) void load(); });
     if (expanded.has(id)) { root.open = true; void load(); }
-    const cleanup = () => { disposed = true; cleanups.delete(cleanup); }; cleanups.add(cleanup); return cleanup;
+    const cleanup = () => { disposed = true; removeCopyView(); cleanups.delete(cleanup); }; cleanups.add(cleanup); return cleanup;
   }
-  return { decorateThread, teardown() { stopped = true; cleanups.forEach(fn => fn()); cleanups.clear(); drafts.clear(); pending.clear(); expanded.clear(); } };
+  return { decorateThread, teardown() { stopped = true; cleanups.forEach(fn => fn()); cleanups.clear(); drafts.clear(); pending.clear(); expanded.clear(); copies.clear(); copyViews.clear(); } };
 }

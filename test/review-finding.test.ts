@@ -4,7 +4,7 @@ import { createFindingPanels } from '../src/review/finding.js';
 
 const scope = { appId: 'app', tenantId: null, environment: 'test', campaignId: 'campaign', pagePath: '/', resourceId: null };
 let teardown = () => {};
-afterEach(() => { teardown(); document.body.replaceChildren(); window.localStorage.clear(); });
+afterEach(() => { teardown(); document.body.replaceChildren(); window.localStorage.clear(); Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined }); });
 function setup(role = 'lead', override: Record<string, unknown> = {}, extra: Record<string, unknown> = {}, actorId = 'chad') {
   const finding = { thread_id: '30000000-0000-4000-8000-000000000001', version: 4, state: 'needs_decision', details: null, owner_id: null, tester_id: null, fix_build: null, target_id: null, ...override };
   const snapshot = { finding, delivery: null, retests: [], members: [{ id: 'rhona', name: 'Rhona', role: 'reviewer' }, { id: 'chad', name: 'Chad', role: 'lead' }], ...extra };
@@ -152,5 +152,18 @@ describe('acknowledgement draft boundary', () => {
     expect(card.textContent).toContain('Sharing this change');
     accept(new Response(JSON.stringify({ finding: { version: 5 } }), { status: 200 }));
     await vi.waitFor(() => expect([...card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')].every(input => !input.disabled)).toBe(true));
+  });
+});
+
+
+describe('copy progress survives responsive redraw', () => {
+  it('updates the replacement thread card after a delayed clipboard acknowledgement', async () => {
+    let finish!: () => void;
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>(resolve => { finish = resolve; }) } });
+    const { card, panels } = setup('viewer'); await loaded(); click('Copy link to this thread');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    card.replaceChildren(); panels.decorateThread({ id: 'c1', authorId: 'rhona' }, card);
+    await vi.waitFor(() => expect(card.textContent).toContain('Copying the thread link'));
+    finish(); await vi.waitFor(() => expect(card.textContent).toContain('Thread link copied.'));
   });
 });
