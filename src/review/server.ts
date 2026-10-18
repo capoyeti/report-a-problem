@@ -80,6 +80,23 @@ export function createReviewGatewayHandlers(cfg: ReviewGatewayConfig) {
     return json(error instanceof RangeError ? 413 : 503, { error: error instanceof RangeError ? 'too_large' : 'review_unavailable' });
   }
   return {
+    async resolveReturn(req: Request, opaqueId: string): Promise<Response> {
+      try {
+        if (req.method !== 'GET') return json(405, { error: 'method_not_allowed' });
+        const current = await guard(req); if (current instanceof Response) return current;
+        if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(opaqueId)) return json(400, { error: 'invalid_link' });
+        const response = await call('/api/v1/reviews/return/' + opaqueId, { method: 'GET', headers: trustedHeaders(current) });
+        if (!response.ok) return forwardResponse(response);
+        const result = await response.json() as { scope?: unknown; threadId?: unknown; commentId?: unknown; buildId?: unknown; targetId?: unknown; deleted?: unknown };
+        const scope = parseReviewScope(result.scope);
+        if (!scope || !matchesHost(scope, current) || !await cfg.authorizeResource(current, scope)
+          || result.threadId !== opaqueId || typeof result.commentId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(result.commentId)
+          || typeof result.buildId !== 'string' || !isReviewIdentifier(result.buildId)
+          || !(result.targetId === null || isReviewIdentifier(result.targetId)) || typeof result.deleted !== 'boolean') return json(403, { error: 'resource_forbidden' });
+        return json(200, { scope, threadId: result.threadId, commentId: result.commentId,
+          buildId: result.buildId, targetId: result.targetId, deleted: result.deleted });
+      } catch (error) { return failure(error); }
+    },
     async session(req: Request): Promise<Response> {
       try {
         if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' });
@@ -114,7 +131,7 @@ export function createReviewGatewayHandlers(cfg: ReviewGatewayConfig) {
         if (!match || !rawPath.startsWith('/') || rawPath.startsWith('//')
           || rawPath.split('/').some(part => part === '.' || part === '..')
           || parsed.origin !== 'https://review.invalid' || parsed.hash || /[%\\]/.test(rawPath)
-          || [...parsed.searchParams.keys()].some(k => !['page', 'cursor', 'limit', 'include'].includes(k))) {
+          || [...parsed.searchParams.keys()].some(k => !['page', 'cursor', 'limit', 'include', 'retestCursor'].includes(k))) {
           return json(400, { error: 'invalid_path' });
         }
         const bearer = req.headers.get('authorization');

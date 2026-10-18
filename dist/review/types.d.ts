@@ -21,6 +21,7 @@ export interface ReviewRenderer {
     close(): void;
     setTool(tool: 'cursor' | 'highlight' | 'rect' | 'circle' | 'pen' | 'pin'): void;
     refresh(): void;
+    focus?(id: string): void;
     comments(): Array<Record<string, unknown>>;
     syncState(): ReviewSyncState;
     submit(): Promise<unknown>;

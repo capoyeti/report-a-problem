@@ -16,7 +16,7 @@ export interface ReviewTransportConfig {
     onAccessLost?: () => void;
 }
 /** Explicit per-review transport. It never patches global fetch or browser storage. */
-export declare function createReviewTransport(cfg: ReviewTransportConfig): {
+export declare function createReviewTransport(config: ReviewTransportConfig): {
     getSession: (force?: boolean) => Promise<ReviewSession>;
     request: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     stop: () => void;

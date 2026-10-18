@@ -32,7 +32,8 @@ function validateSession(value, cfg, now) {
     return { token: s.token, expiresAt: s.expiresAt, actor: { ...s.actor }, scope, buildId: s.buildId };
 }
 /** Explicit per-review transport. It never patches global fetch or browser storage. */
-export function createReviewTransport(cfg) {
+export function createReviewTransport(config) {
+    const cfg = { ...config, scope: { ...config.scope } };
     if (!isReviewIdentifier(cfg.actorId) || !parseReviewScope(cfg.scope) || !isReviewIdentifier(cfg.buildId)) {
         throw new TypeError('Invalid review transport context');
     }
@@ -89,7 +90,7 @@ export function createReviewTransport(cfg) {
             return session;
         pendingSession = (async () => {
             const response = await send(bootstrap.href, {
-                method: 'POST', headers: { 'content-type': 'application/json' },
+                method: 'POST', headers: { 'content-type': 'application/json', 'x-review-client-build': cfg.buildId },
                 body: JSON.stringify({ campaignId: cfg.scope.campaignId, pagePath: cfg.scope.pagePath, resourceId: cfg.scope.resourceId }),
             });
             if (response.status === 401 || response.status === 403 || response.status === 410)
@@ -110,10 +111,11 @@ export function createReviewTransport(cfg) {
         })().finally(() => { pendingSession = null; });
         return pendingSession;
     }
-    async function request(input, init = {}) {
+    async function oneRequest(input, init = {}) {
         const target = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, origin);
-        const expected = `${gateway}/v1/annotate/reviews/${encodeURIComponent(cfg.scope.campaignId)}/`;
-        if (!target.href.startsWith(expected) || target.origin !== origin || target.username || target.password || target.hash) {
+        const native = `${gateway}/v1/annotate/reviews/${encodeURIComponent(cfg.scope.campaignId)}/`;
+        const sidecar = `${gateway}/v1/reviews/${encodeURIComponent(cfg.scope.campaignId)}/threads/`;
+        if ((!target.href.startsWith(native) && !target.href.startsWith(sidecar)) || target.origin !== origin || target.username || target.password || target.hash) {
             throw new TypeError('Review request outside its gateway');
         }
         const incoming = new Headers(init.headers);
@@ -137,6 +139,65 @@ export function createReviewTransport(cfg) {
         if (response.status === 401 || response.status === 403)
             return loseAccess();
         return response;
+    }
+    async function request(input, init = {}) {
+        const target = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, origin);
+        const listPath = `${gateway}/v1/annotate/reviews/${encodeURIComponent(cfg.scope.campaignId)}/comments`;
+        const findingPath = `${gateway}/v1/reviews/${encodeURIComponent(cfg.scope.campaignId)}/threads/`;
+        if ((init.method ?? 'GET').toUpperCase() === 'GET' && target.href.startsWith(findingPath) && target.pathname.endsWith('/finding')) {
+            let snapshot = null;
+            const retests = [];
+            const cursors = new Set();
+            for (let page = 0; page <= 100; page++) {
+                const response = await oneRequest(target, init);
+                if (!response.ok)
+                    return response;
+                const data = await response.json();
+                if (!Array.isArray(data.retests) || !data.finding || snapshot && snapshot.finding.version !== data.finding.version)
+                    throw new Error('Finding changed during history load');
+                if (!snapshot)
+                    snapshot = data;
+                retests.push(...data.retests);
+                if (retests.length > 10000)
+                    throw new Error('Retest history exceeds limit');
+                if (data.retestsComplete === true || data.retestsComplete === undefined && data.nextRetestCursor == null)
+                    return new Response(JSON.stringify({ ...snapshot, retests, retestsComplete: true, nextRetestCursor: null }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+                if (data.retestsComplete !== false || typeof data.nextRetestCursor !== 'string' || !data.nextRetestCursor || cursors.has(data.nextRetestCursor))
+                    throw new Error('Invalid retest history cursor');
+                cursors.add(data.nextRetestCursor);
+                target.searchParams.set('retestCursor', data.nextRetestCursor);
+            }
+            throw new Error('Retest history is incomplete');
+        }
+        if ((init.method ?? 'GET').toUpperCase() !== 'GET' || target.origin + target.pathname !== listPath)
+            return oneRequest(input, init);
+        // ReviewJS expects one full snapshot. Drain all pages before exposing any,
+        // so an interrupted later page cannot erase previously visible threads.
+        const headers = new Headers(init.headers);
+        headers.delete('if-none-match');
+        const comments = [];
+        const cursors = new Set();
+        for (let page = 0; page <= 100; page++) {
+            const response = await oneRequest(target, { ...init, headers });
+            if (!response.ok)
+                return response;
+            const data = await response.json();
+            if (!Array.isArray(data.comments))
+                throw new Error('Invalid shared comment snapshot');
+            comments.push(...data.comments);
+            if (comments.length > 10000)
+                throw new Error('Shared comment snapshot exceeds campaign limit');
+            if (data.complete === true || data.complete === undefined && data.nextCursor == null) {
+                return new Response(JSON.stringify({ comments: [...new Map(comments.map(c => [c.id, c])).values()], complete: true, nextCursor: null }), {
+                    status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+                });
+            }
+            if (data.complete !== false || typeof data.nextCursor !== 'string' || !data.nextCursor || cursors.has(data.nextCursor))
+                throw new Error('Invalid shared comment cursor');
+            cursors.add(data.nextCursor);
+            target.searchParams.set('cursor', data.nextCursor);
+        }
+        throw new Error('Shared comment snapshot is incomplete');
     }
     return { getSession, request, stop, gateway };
 }

@@ -1,9 +1,12 @@
 import { getReviewDraftKey, type ReviewScope } from './contract.js';
 import { createReviewTransport, type ReviewTransportConfig } from './transport.js';
+import { createFindingPanels, type ReviewSource } from './finding.js';
 import type { ReviewRenderer, ReviewRendererModule, ReviewSyncState } from './types.js';
 
 export interface ReviewAdapterConfig extends Omit<ReviewTransportConfig, 'origin' | 'onAccessLost'> {
   onAccessLost?: () => void;
+  sources?: readonly ReviewSource[];
+  returnPath?: string;
   onSync?: (state: ReviewSyncState) => void;
   loadRenderer?: () => Promise<ReviewRendererModule>;
 }
@@ -23,12 +26,15 @@ export function createReviewAdapter(config: ReviewAdapterConfig, host: Window = 
   let mounting: Promise<void> | null = null;
   const transport = createReviewTransport({ ...config, origin: host.location.origin,
     onAccessLost: () => { stop(); config.onAccessLost?.(); } });
+  const findings = createFindingPanels({ host, scope: config.scope, actorId: config.actorId,
+    buildId: config.buildId, gateway: transport.gateway, request: transport.request,
+    getSession: transport.getSession, sources: config.sources, returnPath: config.returnPath });
   const owner = { stop };
   function onSync(event: Event) {
     if (!disposed && owners.get(host) === owner) config.onSync?.((event as CustomEvent<ReviewSyncState>).detail);
   }
   function stop() {
-    disposed = true; transport.stop();
+    disposed = true; transport.stop(); findings.teardown();
     host.removeEventListener('annotate:sync', onSync);
     renderer?.destroy(); renderer = null;
     if (owners.get(host) === owner) owners.delete(host);
@@ -51,6 +57,7 @@ export function createReviewAdapter(config: ReviewAdapterConfig, host: Window = 
         integration: {
           initialSession: session, storageNamespace: getReviewDraftKey(config.actorId, config.scope),
           getSession: transport.getSession, request: transport.request,
+          decorateThread: findings.decorateThread, teardown: findings.teardown,
         },
       });
       mounted = true;
@@ -62,6 +69,11 @@ export function createReviewAdapter(config: ReviewAdapterConfig, host: Window = 
     open: () => renderer?.open(),
     close: () => renderer?.close(),
     refresh: () => renderer?.refresh(),
+    /** Call after shared comments load. False means missing or deleted, never a guessed target. */
+    focus: (id: string): boolean => {
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !renderer?.comments().some(c => c.id === id)) return false;
+      renderer.open(); renderer.focus?.(id); return true;
+    },
     setTool: (tool: Parameters<ReviewRenderer['setTool']>[0]) => renderer?.setTool(tool),
     submit: () => renderer ? renderer.submit() : Promise.reject(new Error('Review is not open')),
     comments: () => renderer?.comments() ?? [],

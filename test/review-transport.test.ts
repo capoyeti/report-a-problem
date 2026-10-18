@@ -115,3 +115,41 @@ describe('explicit authenticated review transport', () => {
     expect((signal as unknown as AbortSignal).aborted).toBe(true);
   });
 });
+
+describe('complete shared snapshots', () => {
+  it('drains paginated comments atomically with one verified session', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(json({ comments: [{ id: 'one' }], complete: false, nextCursor: 'cursor-a' }))
+      .mockResolvedValueOnce(json({ comments: [{ id: 'two' }], complete: true, nextCursor: null }));
+    const t = createReviewTransport(config(f));
+    const result = await t.request(target + '?page=%2Fdocuments', { headers: { 'if-none-match': 'old-page-etag' } });
+    expect(await result.json()).toEqual({ comments: [{ id: 'one' }, { id: 'two' }], complete: true, nextCursor: null });
+    expect(String(f.mock.calls[2][0])).toContain('cursor=cursor-a');
+    expect(new Headers(f.mock.calls[1][1]!.headers).has('if-none-match')).toBe(false);
+    t.stop();
+  });
+  it('does not expose a successful partial list when a later page fails', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(json({ comments: [{ id: 'one' }], complete: false, nextCursor: 'cursor-a' }))
+      .mockResolvedValueOnce(json({ error: 'unavailable' }, 503));
+    const t = createReviewTransport(config(f));
+    const result = await t.request(target); expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ error: 'unavailable' }); t.stop();
+  });
+  it('rejects cyclic cursors rather than replacing the shared list', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockImplementation(async () => json({ comments: [], complete: false, nextCursor: 'same' }));
+    const t = createReviewTransport(config(f)); await expect(t.request(target)).rejects.toThrow('cursor'); t.stop();
+  });
+  it('allows sidecar commands only inside the current campaign', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session())).mockResolvedValue(json({}));
+    const t = createReviewTransport(config(f));
+    expect((await t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding')).status).toBe(200);
+    await expect(t.request(origin + '/api/review/v1/reviews/other/threads/c1/finding')).rejects.toThrow('outside'); t.stop();
+  });
+  it('snapshots configuration instead of letting a mutable scope change a grant', async () => {
+    const cfg = config(vi.fn<typeof fetch>().mockResolvedValue(json(session()))); cfg.scope = { ...scope };
+    const t = createReviewTransport(cfg); cfg.scope.pagePath = '/private';
+    expect((await t.getSession()).scope.pagePath).toBe('/documents'); t.stop();
+  });
+});

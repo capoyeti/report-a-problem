@@ -17,6 +17,7 @@ export interface ReviewGatewayConfig {
 }
 /** Server-only forwarder. Never export this entry from a client component. */
 export declare function createReviewGatewayHandlers(cfg: ReviewGatewayConfig): {
+    resolveReturn(req: Request, opaqueId: string): Promise<Response>;
     session(req: Request): Promise<Response>;
     forward(req: Request, servicePath: string): Promise<Response>;
 };

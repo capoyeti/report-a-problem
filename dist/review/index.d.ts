@@ -3,3 +3,4 @@ export type { ReviewAdapterConfig } from './adapter.js';
 export { createReviewTransport, ReviewAccessError } from './transport.js';
 export type { ReviewTransportConfig } from './transport.js';
 export type { ReviewSession, ReviewSyncState } from './types.js';
+export type { ReviewSource } from './finding.js';

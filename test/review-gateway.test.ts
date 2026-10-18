@@ -94,3 +94,23 @@ describe('host review gateway', () => {
     expect(r.status).toBe(413); expect(f).not.toHaveBeenCalled();
   });
 });
+
+describe('opaque thread return', () => {
+  const id = '30000000-0000-4000-8000-000000000001';
+  const result = { scope, threadId: id, commentId: 'comment-1', buildId: 'build-original', targetId: null, deleted: false };
+  it('checks actual returned resource before exposing navigation metadata', async () => {
+    const { handlers, f, authorizeResource } = setup(); f.mockResolvedValue(response(result));
+    expect(await (await handlers.resolveReturn(req(), id)).json()).toEqual(result);
+    expect(authorizeResource).toHaveBeenCalledWith(expect.anything(), scope);
+    const h = new Headers(f.mock.calls[0][1]!.headers);
+    expect(h.get('authorization')).toBeNull(); expect(h.get('x-review-actor-id')).toBe('rhona');
+  });
+  it('does not disclose a thread after product resource access is revoked', async () => {
+    const { handlers, f } = setup({ authorizeResource: async () => false }); f.mockResolvedValue(response(result));
+    expect((await handlers.resolveReturn(req(), id)).status).toBe(403);
+  });
+  it.each([{ ...result, scope: { ...scope, tenantId: 'other' } }, { ...result, threadId: 'another' }, { ...result, commentId: '<script>' }])('rejects substituted return data %#', async value => {
+    const { handlers, f } = setup(); f.mockResolvedValue(response(value));
+    expect((await handlers.resolveReturn(req(), id)).status).toBe(403);
+  });
+});

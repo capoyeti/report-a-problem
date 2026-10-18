@@ -1,5 +1,6 @@
 import { getReviewDraftKey } from './contract.js';
 import { createReviewTransport } from './transport.js';
+import { createFindingPanels } from './finding.js';
 async function loadRenderer() {
     // This file is produced by scripts/build-review-renderer.mjs. The root export
     // never imports it, and this dynamic import runs only after bootstrap succeeds.
@@ -14,6 +15,9 @@ export function createReviewAdapter(config, host = window) {
     let mounting = null;
     const transport = createReviewTransport({ ...config, origin: host.location.origin,
         onAccessLost: () => { stop(); config.onAccessLost?.(); } });
+    const findings = createFindingPanels({ host, scope: config.scope, actorId: config.actorId,
+        buildId: config.buildId, gateway: transport.gateway, request: transport.request,
+        getSession: transport.getSession, sources: config.sources, returnPath: config.returnPath });
     const owner = { stop };
     function onSync(event) {
         if (!disposed && owners.get(host) === owner)
@@ -22,6 +26,7 @@ export function createReviewAdapter(config, host = window) {
     function stop() {
         disposed = true;
         transport.stop();
+        findings.teardown();
         host.removeEventListener('annotate:sync', onSync);
         renderer?.destroy();
         renderer = null;
@@ -51,6 +56,7 @@ export function createReviewAdapter(config, host = window) {
                 integration: {
                     initialSession: session, storageNamespace: getReviewDraftKey(config.actorId, config.scope),
                     getSession: transport.getSession, request: transport.request,
+                    decorateThread: findings.decorateThread, teardown: findings.teardown,
                 },
             });
             mounted = true;
@@ -62,6 +68,14 @@ export function createReviewAdapter(config, host = window) {
         open: () => renderer?.open(),
         close: () => renderer?.close(),
         refresh: () => renderer?.refresh(),
+        /** Call after shared comments load. False means missing or deleted, never a guessed target. */
+        focus: (id) => {
+            if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !renderer?.comments().some(c => c.id === id))
+                return false;
+            renderer.open();
+            renderer.focus?.(id);
+            return true;
+        },
         setTool: (tool) => renderer?.setTool(tool),
         submit: () => renderer ? renderer.submit() : Promise.reject(new Error('Review is not open')),
         comments: () => renderer?.comments() ?? [],
