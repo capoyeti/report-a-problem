@@ -1,8 +1,9 @@
 import { getReviewScopeKey, isReviewIdentifier, parseReviewScope, REVIEW_ROLES } from './contract.js';
 export class ReviewAccessError extends Error {
     constructor(kind) {
-        super(kind === 'access_lost' ? 'Sign in again or ask the review lead to check your access.'
-            : kind === 'stopped' ? 'Review stopped.' : 'Could not open the review. Your draft stays on this device.');
+        super(kind === 'build_changed' ? 'A newer version of this page is available. Reload to continue. Your draft stays on this device.'
+            : kind === 'access_lost' ? 'Sign in again or ask the review lead to check your access.'
+                : kind === 'stopped' ? 'Review stopped.' : 'Could not open the review. Your draft stays on this device.');
         this.kind = kind;
         this.name = 'ReviewAccessError';
     }
@@ -135,6 +136,14 @@ export function createReviewTransport(config) {
             // Another request may already have renewed the same rejected token.
             const renewed = session && session.token !== firstSession.token ? session : await getSession(true);
             response = await attempt(renewed);
+        }
+        if (response.status === 409) {
+            const error = await response.clone().json().catch(() => null);
+            if (error?.error === 'build_mismatch') {
+                stop();
+                cfg.onBuildChanged?.();
+                throw new ReviewAccessError('build_changed');
+            }
         }
         if (response.status === 401 || response.status === 403)
             return loseAccess();

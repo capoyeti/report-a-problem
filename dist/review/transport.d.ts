@@ -1,8 +1,8 @@
 import { type ReviewScope } from './contract.js';
 import type { ReviewSession } from './types.js';
 export declare class ReviewAccessError extends Error {
-    readonly kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable';
-    constructor(kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable');
+    readonly kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable' | 'build_changed';
+    constructor(kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable' | 'build_changed');
 }
 export interface ReviewTransportConfig {
     origin: string;
@@ -14,6 +14,7 @@ export interface ReviewTransportConfig {
     fetch?: typeof fetch;
     now?: () => number;
     onAccessLost?: () => void;
+    onBuildChanged?: () => void;
 }
 /** Explicit per-review transport. It never patches global fetch or browser storage. */
 export declare function createReviewTransport(config: ReviewTransportConfig): {

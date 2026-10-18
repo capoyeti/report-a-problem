@@ -25,7 +25,8 @@ export function createReviewAdapter(config: ReviewAdapterConfig, host: Window = 
   let mounted = false;
   let mounting: Promise<void> | null = null;
   const transport = createReviewTransport({ ...config, origin: host.location.origin,
-    onAccessLost: () => { stop(); config.onAccessLost?.(); } });
+    onAccessLost: () => { stop(); config.onAccessLost?.(); },
+    onBuildChanged: () => { stop(); config.onBuildChanged?.(); } });
   const findings = createFindingPanels({ host, scope: config.scope, actorId: config.actorId,
     buildId: config.buildId, gateway: transport.gateway, request: transport.request,
     getSession: transport.getSession, sources: config.sources, returnPath: config.returnPath });

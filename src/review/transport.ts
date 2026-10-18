@@ -2,8 +2,9 @@ import { getReviewScopeKey, isReviewIdentifier, parseReviewScope, REVIEW_ROLES, 
 import type { ReviewSession } from './types.js';
 
 export class ReviewAccessError extends Error {
-  constructor(public readonly kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable') {
-    super(kind === 'access_lost' ? 'Sign in again or ask the review lead to check your access.'
+  constructor(public readonly kind: 'invalid_session' | 'access_lost' | 'stopped' | 'unavailable' | 'build_changed') {
+    super(kind === 'build_changed' ? 'A newer version of this page is available. Reload to continue. Your draft stays on this device.'
+      : kind === 'access_lost' ? 'Sign in again or ask the review lead to check your access.'
       : kind === 'stopped' ? 'Review stopped.' : 'Could not open the review. Your draft stays on this device.');
     this.name = 'ReviewAccessError';
   }
@@ -19,6 +20,7 @@ export interface ReviewTransportConfig {
   fetch?: typeof fetch;
   now?: () => number;
   onAccessLost?: () => void;
+  onBuildChanged?: () => void;
 }
 
 function sameOriginPath(value: string, origin: string): URL {
@@ -125,6 +127,10 @@ export function createReviewTransport(config: ReviewTransportConfig) {
       // Another request may already have renewed the same rejected token.
       const renewed = session && session.token !== firstSession.token ? session : await getSession(true);
       response = await attempt(renewed);
+    }
+    if (response.status === 409) {
+      const error = await response.clone().json().catch(() => null);
+      if (error?.error === 'build_mismatch') { stop(); cfg.onBuildChanged?.(); throw new ReviewAccessError('build_changed'); }
     }
     if (response.status === 401 || response.status === 403) return loseAccess();
     return response;

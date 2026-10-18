@@ -172,3 +172,15 @@ describe('complete retest history', () => {
     await expect(t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding')).rejects.toThrow('changed'); t.stop();
   });
 });
+
+
+describe('deployment changes after bootstrap', () => {
+  it('stops requests and asks for reload rather than treating stale UI as a comment conflict', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session())).mockResolvedValue(json({ error: 'build_mismatch' }, 409));
+    const onBuildChanged = vi.fn(), onAccessLost = vi.fn();
+    const t = createReviewTransport(config(f, { onBuildChanged, onAccessLost }));
+    await expect(t.request(target)).rejects.toThrow('Reload');
+    expect(onBuildChanged).toHaveBeenCalledOnce(); expect(onAccessLost).not.toHaveBeenCalled();
+    await expect(t.request(target)).rejects.toThrow('stopped');
+  });
+});
