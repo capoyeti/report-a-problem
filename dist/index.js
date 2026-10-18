@@ -12,3 +12,4 @@ export { createReportProblemHandlers } from './server/handlers.js';
 export { ReportProblemPanel } from './client/ReportProblemPanel.js';
 export { ReportProblemProvider, useReportProblem } from './client/ReportProblemProvider.js';
 export { uploadAttachment } from './client/upload.js';
+export { uploadAttachmentDetailed } from './client/upload.js';
