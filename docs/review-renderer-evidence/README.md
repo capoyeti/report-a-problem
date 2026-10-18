@@ -14,7 +14,7 @@ Verified locally:
 | --- | --- |
 | `npm ci` | Exit 0. Lockfile unchanged. Existing audit reports 7 dependency vulnerabilities; no unrelated upgrades made. |
 | `npm run build` | Exit 0, pinned source verified, derivative regenerated in src and dist. |
-| `npm test` | Exit 0, 14 files and 192 tests passed. |
+| `npm test` | Exit 0, 14 files and 197 tests passed. |
 | `npx tsc --noEmit` | Exit 0. |
 | `git diff --check` | Exit 0. |
 | `gitleaks git --pre-commit --staged --redact --no-banner` | Exit 0, no leaks found. |
@@ -56,3 +56,15 @@ publication, ready transition or CI retry was performed by this renderer task.
 The original spike harness belongs to the coordinator and was not edited. Its pin
 journey must click Use this target before opening the composer after integration.
 The root reporting code, transport, adapter and gateway were not changed.
+
+Cold-review follow-up: discussion wording and native lead options are explicitly
+scoped, with a fix-verification explanation. Resume draft is hidden after a
+successful local commit, while rejected fields and queued words remain. Five
+additional generated-renderer regressions cover integrated/nonintegrated labels,
+composer cleanup, committed-reply lost acknowledgement followed by reply deletion,
+ambiguous reread failure and confirmed parent deletion, and server polling hints.
+The live-parent replay test preserves other queued edits/replies, their operation
+keys and their original conflict base, and retains deleted reply words for an
+explicit copy/discard decision. Poll timing is tested at 15 seconds followed by
+the normal five seconds, including malformed/minimum hints and a 304 response.
+Integrated storage warnings no longer promise the disabled JSON export.

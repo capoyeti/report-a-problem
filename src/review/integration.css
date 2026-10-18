@@ -70,3 +70,5 @@ body.an-review-selecting #__an_overlay *, body.an-review-selecting #__an_pins * 
 #__an_host .an-original-context summary { min-height:44px; display:list-item; align-content:center; cursor:pointer; }
 #__an_host .an-original-context summary:focus-visible { outline:3px solid #245da8; outline-offset:2px; }
 body.an-review-browse #__an_overlay *, body.an-review-browse #__an_pins * { pointer-events:none !important; }
+#__an_host #__an_resume[hidden] { display:none; }
+#__an_host select.an-status { max-width:100%; min-width:200px; }

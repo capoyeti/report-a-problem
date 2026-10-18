@@ -120,7 +120,7 @@ const createController = function (host) {
       try { window.localStorage.setItem(integration ? integration.storageNamespace + ':' + k : k,
         integration ? JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() + 7 * 86400000, value: v }) : v); return true; } catch (e) {
         if (e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED"))
-          setTimeout(function () { toast("Storage full — export your comments before adding more.", { kind: "error", duration: 8000 }); }, 0);
+          setTimeout(function () { toast(integration ? 'Storage is full. Keep this page open until your changes are shared. Closing it can lose unshared work.' : "Storage full — export your comments before adding more.", { kind: "error", duration: 8000 }); }, 0);
         return false;
       }
     },
@@ -130,7 +130,8 @@ const createController = function (host) {
     if (expiryShown) return; expiryShown = true;
     setTimeout(function () { ensureHost().appendChild(el('p', { id: '__an_expiry', role: 'alert', text: 'A saved draft expired after seven days or has an older format. It will not be shared. Start a new comment.' })); }, 0);
   }
-  var UNSAVED_MSG = "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";
+  var UNSAVED_MSG = integration ? 'This browser cannot save your draft on this device. Keep this page open until your changes are shared. Closing it can lose unshared work.'
+    : "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";
   var quotaWarned = false;
   // Persistent (not toast) warning for the failure modes that toasts can't
   // express: storage denied outright, or writes silently failing. Visibility
@@ -138,7 +139,7 @@ const createController = function (host) {
   // an unrelated failed preference write can't leave the banner stuck on.
   function showUnsavedBanner(ok) {
     if (!ok) {
-      if (!quotaWarned) { quotaWarned = true; toast("Storage is unavailable — your comments are kept on screen only.", { kind: "error", duration: 8000 }); }
+      if (!quotaWarned) { quotaWarned = true; toast(integration ? 'Storage is unavailable. Keep this page open until your changes are shared. Closing it can lose unshared work.' : "Storage is unavailable — your comments are kept on screen only.", { kind: "error", duration: 8000 }); }
       if (!document.getElementById("__an_unsaved"))
         ensureHost().appendChild(el("div", { id: "__an_unsaved", role: "alert", text: UNSAVED_MSG }));
     } else if (document.getElementById("__an_unsaved")) {
@@ -282,7 +283,8 @@ const createController = function (host) {
   // the page: serialize() is the single exit point.
   // --------------------------------------------------------------------------
   var SCHEMA = 2;
-  var STATUSES = { open: "Open", in_progress: "In progress", resolved: "Resolved", wont_fix: "Won’t fix" };
+  var STATUSES = integration ? { open: 'Open discussion', in_progress: 'Discussion in progress', resolved: 'Discussion closed', wont_fix: 'Discussion declined' }
+    : { open: "Open", in_progress: "In progress", resolved: "Resolved", wont_fix: "Won’t fix" };
   function isClosed(status) { return status === "resolved" || status === "wont_fix"; }
   function safeColor(v) {
     return typeof v === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) ? v : COLORS[0].hex;
@@ -629,7 +631,7 @@ const createController = function (host) {
     idle: "Shared with the review team.",
     pending: "Sending to the review…",
     offline: "Offline — changes are kept here and sent when the connection returns.",
-    error: "Not signed in to the review — changes are kept on this device.",
+    error: integration ? 'Could not share. Your draft is kept here. Compare or retry to continue.' : "Not signed in to the review — changes are kept on this device.",
   };
   function syncChanged() {
     if (!REMOTE) return;
@@ -935,6 +937,9 @@ const createController = function (host) {
       scheduleFlush(0);
       return;
     }
+    if (integration && status === 410 && (op.t === 'reply' || op.t === 'unreply') && !r.parentGoneVerified) {
+      return reconcileGoneReply(op, r);
+    }
     if (integration && status === 410 && op.t !== 'del') {
       var lost = dbRead().comments.find(function (c) { return c.id === op.id; });
       if (lost) { var deletedDrafts = JSON.parse(store.get('deleted-drafts') || '[]'); deletedDrafts.push(lost); store.set('deleted-drafts', JSON.stringify(deletedDrafts)); showDeletedDraft(lost); }
@@ -982,6 +987,10 @@ const createController = function (host) {
     if (integration && JSON.parse(store.get('tombstones') || '{}')[w && w.id]) return null;
     if (!isValidComment(w) || typeof w.page !== "string" || w.visibility === "private") return null;
     var c = normalizeComment(w);
+    if (integration) {
+      var deletedReplies = JSON.parse(store.get('reply-tombstones') || '{}')[c.id] || {};
+      c.replies = c.replies.filter(function (reply) { return !deletedReplies[reply.id]; });
+    }
     c.page = localPage(w.page);
     return c;
   }
@@ -1101,11 +1110,17 @@ const createController = function (host) {
     if (!REMOTE) return;
     setReadMark(id, serverStamps(dbRead())[id]);
   }
+  function applyPollAfter(response) {
+    if (!integration) return;
+    var value = response.headers.get('X-Review-Poll-After'), delay = value === null ? NaN : Number(value);
+    sync.pollAfter = Math.max(5000, CFG.pollInterval, Number.isSafeInteger(delay) && delay > 0 ? Math.min(delay, 2147483647) : 0);
+    clearTimeout(sync.pollTimer); sync.pollTimer = setTimeout(poll, sync.pollAfter);
+  }
   function poll() {
     if (!REMOTE || destroyed) return;
     clearTimeout(sync.pollTimer);
     if (document.hidden) return;   // resumed on visibilitychange
-    sync.pollTimer = setTimeout(poll, CFG.pollInterval);
+    sync.pollTimer = setTimeout(poll, sync.pollAfter || CFG.pollInterval);
     if (!sync.token || sync.polling) return;
     var page = wirePage(PAGE), localKey = PAGE, acks = sync.acks;
     if (sync.etagPage !== page) { sync.etag = ""; sync.etagPage = page; }
@@ -1115,9 +1130,9 @@ const createController = function (host) {
         if (destroyed || !REMOTE) return;
         var status = r.res.status;
         if (status === 401) { sync.token = null; ensureSession(true); return; }
-        if (status === 304) { sync.offline = false; syncChanged(); return; }
+        if (status === 304) { applyPollAfter(r.res); sync.offline = false; syncChanged(); return; }
         if (status !== 200 || !r.data || !Array.isArray(r.data.comments)) { if (integration) { sync.offline = true; syncChanged(); } return; }
-        sync.loaded = true;
+        applyPollAfter(r.res); sync.loaded = true;
         sync.offline = false; syncChanged();
         // A write acknowledged while this read was in flight may be missing
         // from it; discard the snapshot and read again rather than regress.
@@ -1136,6 +1151,52 @@ const createController = function (host) {
     lastSyncSig = sig;
     backgroundLoad();
   }
+  function reconcileGoneReply(op, response) {
+    markOp(op, { held: true, replyGone: true }); sync.held = true; syncChanged(); renderPanel();
+    settleWaiters(new Error('Could not share this reply. Its draft is kept while the discussion is checked.'));
+    return apiFetch('GET', '/comments?page=' + encodeURIComponent(wirePage(PAGE))).then(function (r) {
+      if (destroyed) return;
+      if (!r.res.ok || !r.data || !Array.isArray(r.data.comments)) throw new Error('unavailable');
+      var current = r.data.comments.find(function (c) { return c.id === op.id; });
+      if (!current) {
+        markOp(op, { held: false, replyGone: false }); releaseHold();
+        handleResponse(op, Object.assign({}, response, { parentGoneVerified: true }));
+        releaseHold(); return;
+      }
+      var parent = fromWire(current);
+      if (!parent || parent.page !== PAGE) throw new Error('unavailable');
+      var replyId = op.t === 'reply' ? op.r.id : op.rid;
+      // An inconsistent snapshot is insufficient evidence to discard any operation.
+      if (current.replies.some(function (reply) { return reply.id === replyId; })) throw new Error('unavailable');
+      var tombstones = JSON.parse(store.get('reply-tombstones') || '{}');
+      (tombstones[op.id] = tombstones[op.id] || {})[replyId] = true;
+      store.set('reply-tombstones', JSON.stringify(tombstones));
+      if (op.t === 'reply' && op.r.text) {
+        var drafts = JSON.parse(store.get('deleted-reply-drafts') || '[]');
+        if (!drafts.some(function (draft) { return draft.key === op.key; })) drafts.push({ key: op.key, threadId: op.id, text: op.r.text });
+        store.set('deleted-reply-drafts', JSON.stringify(drafts));
+      }
+      dropOps(function (other) { return other.key === op.key; });
+      var d = dbRead(), local = d.comments.find(function (c) { return c.id === op.id; });
+      if (local) local.replies = local.replies.filter(function (reply) { return reply.id !== replyId; });
+      dbWrite(d); sync.acks++; mergeServerPage(r.data.comments); releaseHold(); renderPanel(); scheduleFlush(0);
+      toast('A reply was deleted. The discussion is still here; your words are kept in its thread.');
+    }).catch(function () {
+      if (!destroyed) { sync.held = true; syncChanged(); renderPanel(); toast('Could not check this discussion. Your reply and other changes are kept.'); }
+    });
+  }
+  function decorateDeletedReplies(c, card) {
+    JSON.parse(store.get('deleted-reply-drafts') || '[]').filter(function (draft) { return draft.threadId === c.id; }).forEach(function (draft) {
+      var box = el('section', { class: 'an-conflict', 'aria-label': 'Deleted reply recovery' });
+      box.appendChild(el('p', { text: 'This reply was deleted. These words are kept for you and will not be shared automatically. Copy them into a new reply if you still want to discuss them.' }));
+      box.appendChild(el('p', { text: draft.text }));
+      box.appendChild(el('button', { class: 'an-ghost', text: 'Copy kept reply words', onclick: function (e) { e.stopPropagation(); copyText(draft.text, 'Reply words copied'); } }));
+      box.appendChild(el('button', { class: 'an-ghost', text: 'Discard kept reply words', onclick: function (e) {
+        e.stopPropagation(); store.set('deleted-reply-drafts', JSON.stringify(JSON.parse(store.get('deleted-reply-drafts') || '[]').filter(function (d) { return d.key !== draft.key; }))); renderPanel();
+      } }));
+      listen(box, 'click', function (e) { e.stopPropagation(); }); card.appendChild(box);
+    });
+  }
   function showDeletedDraft(c) {
     if (document.getElementById('__an_deleted_' + c.id)) return;
     var box = el('section', { id: '__an_deleted_' + c.id, class: 'an-deleted-draft', role: 'alert' });
@@ -1146,6 +1207,13 @@ const createController = function (host) {
   function decorateConflict(c, card) {
     var held = readQueue().filter(function (o) { return o.id === c.id && o.held; });
     if (!held.length) return;
+    var uncertainReply = held.find(function (o) { return o.replyGone; });
+    if (uncertainReply) {
+      var check = el('section', { class: 'an-conflict' }, [el('p', { text: 'Could not confirm whether the reply or its discussion was deleted. Your words and other changes are kept.' })]);
+      check.appendChild(el('button', { class: 'an-ghost', text: 'Check discussion again', onclick: function (e) {
+        e.stopPropagation(); reconcileGoneReply(uncertainReply, { res: { status: 410 }, data: {} });
+      } })); card.appendChild(check); return;
+    }
     var box = el('section', { class: 'an-conflict', 'aria-label': 'Compare saved draft' });
     box.appendChild(el('p', { text: 'Could not share. Your local draft is kept. Reload the current shared version to compare before deciding.' }));
     var local = el('p', { text: 'Your draft: ' + c.text + (c.replies.length ? ' Replies: ' + c.replies.map(function (r) { return r.text; }).join('; ') : '') });
@@ -1796,7 +1864,7 @@ const createController = function (host) {
   // ==========================================================================
   // ICONS — inline SVG markup, keyed by name (tool icons share the tool's key)
   // ==========================================================================
-  if (integration) CSS_TEXT += "/* Integration boundary: host button styles must not shrink review icons. */\n#__an_host { font-size:14px; }\n#__an_host .an-btn, #__an_host #__an_colorbtn {\n  width:44px; height:44px; min-width:44px; min-height:44px;\n  padding:0; margin:0; box-sizing:border-box; flex-shrink:0;\n}\n#__an_host .an-btn svg { width:20px; height:20px; flex-shrink:0; }\n#__an_host .an-mini, #__an_host .an-hbtn, #__an_host .an-x,\n#__an_host .an-primary, #__an_host .an-ghost, #__an_host .an-status {\n  min-height:44px; margin:0; box-sizing:border-box;\n}\n#__an_host .an-mini, #__an_host .an-primary, #__an_host .an-ghost {\n  font-size:14px; padding:8px 12px;\n}\n#__an_host .an-body, #__an_host .an-reply, #__an_host .an-ta,\n#__an_host .an-empty, #__an_host .an-localnote { font-size:14px; }\n#__an_host .an-localnote.an-synced { color:#087347; }\n#__an_host .an-cact { flex-wrap:wrap; }\n#__an_host button:focus-visible, #__an_host textarea:focus-visible,\n#__an_host select:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\n#__an_host.an-readonly [data-tool]:not([data-tool=\"cursor\"]),\n#__an_host.an-readonly #__an_plus, #__an_host.an-readonly .an-replybox,\n#__an_host.an-readonly .an-editbox,\n#__an_host.an-readonly .an-cact button:not(.an-histbtn):not([title=\"Copy link to this comment\"]) { display:none; }\n/* Explicit marking preserves browser gestures until a drawing tool is chosen. */\nbody.an-review-selecting { cursor:crosshair; touch-action:pan-x pan-y pinch-zoom; }\n#__an_targetoutline { position:fixed; border:3px solid #245da8; outline:2px solid white; pointer-events:none; z-index:2147483250; box-sizing:border-box; }\n#__an_target { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); width:min(560px,calc(100vw - 24px)); max-height:45dvh; overflow:auto; z-index:2147483300; padding:12px; border:2px solid #245da8; border-radius:12px; background:var(--an-bg,#fff); color:var(--an-fg,#172b3a); display:flex; flex-wrap:wrap; gap:8px; box-sizing:border-box; }\n#__an_target strong { flex:1 0 100%; overflow-wrap:anywhere; }\n#__an_host .an-context, #__an_host .an-conflict { font-size:14px; line-height:1.5; overflow-wrap:anywhere; }\n#__an_host .an-context { margin:8px 0; }\n#__an_host .an-conflict { border:2px solid #996300; padding:10px; border-radius:8px; }\n#__an_host .an-conflict button { display:block; width:100%; margin:6px 0; white-space:normal; }\n#__an_expiry { position:fixed; left:12px; right:12px; top:12px; padding:12px; margin:0; background:#fff4d6; color:#563600; border:2px solid #996300; z-index:2147483400; }\n#__an_host .an-hbtn, #__an_host .an-x, #__an_host .an-chip { min-width:44px; min-height:44px; }\n#__an_host .an-ph { flex-wrap:wrap; gap:6px; }\n#__an_host .an-chip { font:inherit; }\n#__an_host .an-body, #__an_host .an-reply { overflow-wrap:anywhere; }\n#__an_host #__an_compose { box-sizing:border-box; max-width:calc(100vw - 16px); }\n#__an_host .an-cfoot { flex-wrap:wrap; gap:6px; }\n#__an_host .an-ta, #__an_host input, #__an_host select { font-size:16px; }\n#__an_host .an-ckbd { display:none; }\n@media (max-width:900px), (max-height:550px) {\n  #__an_host #__an_compose { position:fixed; left:8px !important; right:8px; top:auto !important; bottom: max(8px,calc(100dvh - var(--an-vh,100dvh) - var(--an-vtop,0px))); width:auto; max-width:none; max-height:calc(var(--an-vh,100dvh) - 16px); overflow-y:auto; padding:14px 14px max(14px,env(safe-area-inset-bottom)); border-radius:16px 16px 6px 6px; }\n  #__an_host #__an_compose .an-ta { min-height:72px; max-height:24dvh; }\n  #__an_host #__an_panel { top:calc(var(--an-vtop,0px) + 8px); bottom:auto; right:8px; left:8px; width:auto; height:calc(var(--an-vh,100dvh) - 16px); max-height:none; border-radius:14px; transform:translateY(110dvh); padding-bottom:env(safe-area-inset-bottom); }\n  #__an_host #__an_panel.an-open { transform:translateY(0); }\n  #__an_host #__an_bar { right:8px !important; bottom:max(8px,env(safe-area-inset-bottom)); max-height:calc(100dvh - 16px); overflow:auto; }\n  #__an_host #__an_hint { top:8px; max-width:calc(100vw - 24px); width:max-content; white-space:normal; font-size:14px; }\n  #__an_host .an-ph h2 { flex:1 0 60%; }\n  #__an_host .an-list { min-height:0; overscroll-behavior:contain; }\n}\n@media (prefers-reduced-motion:reduce) { #__an_host * { transition:none !important; scroll-behavior:auto !important; } }\n/* Keep controls readable and remove overlay chrome while composing. */\n#__an_host { --an-muted:#565665; --an-ok:#087347; }\n#__an_host.an-dark { --an-muted:#b5b5c0; --an-ok:#72ddb0; }\n#__an_host .an-cact { opacity:1; }\n#__an_host #__an_panel:not(.an-open) { display:none; }\n#__an_host:has(#__an_compose.an-show) #__an_bar,\n#__an_host:has(#__an_compose.an-show) #__an_hint { display:none; }\n#__an_host .an-ph h2 { order:0; flex:1; }\n#__an_host .an-ph .an-pcount { order:1; }\n#__an_host .an-ph .an-x { order:2; }\n#__an_host .an-ph > .an-ghost { order:3; flex:1 1 42%; }\n#__an_host #__an_compose .an-ctitle { font-size:14px; }\n#__an_host .an-deleted-draft { position:fixed; top:12px; left:12px; right:12px; max-height:40dvh; overflow:auto; padding:12px; border:2px solid #996300; background:var(--an-surface); color:var(--an-fg); z-index:2147483400; }\n@media (max-width:900px), (max-height:550px) { #__an_host #__an_root.an-popen #__an_bar { display:none; } }\nbody.an-drawing #__an_overlay *, body.an-drawing #__an_pins *,\nbody.an-review-selecting #__an_overlay *, body.an-review-selecting #__an_pins * { pointer-events:none !important; }\n#__an_host .an-original-context summary { min-height:44px; display:list-item; align-content:center; cursor:pointer; }\n#__an_host .an-original-context summary:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\nbody.an-review-browse #__an_overlay *, body.an-review-browse #__an_pins * { pointer-events:none !important; }\n";
+  if (integration) CSS_TEXT += "/* Integration boundary: host button styles must not shrink review icons. */\n#__an_host { font-size:14px; }\n#__an_host .an-btn, #__an_host #__an_colorbtn {\n  width:44px; height:44px; min-width:44px; min-height:44px;\n  padding:0; margin:0; box-sizing:border-box; flex-shrink:0;\n}\n#__an_host .an-btn svg { width:20px; height:20px; flex-shrink:0; }\n#__an_host .an-mini, #__an_host .an-hbtn, #__an_host .an-x,\n#__an_host .an-primary, #__an_host .an-ghost, #__an_host .an-status {\n  min-height:44px; margin:0; box-sizing:border-box;\n}\n#__an_host .an-mini, #__an_host .an-primary, #__an_host .an-ghost {\n  font-size:14px; padding:8px 12px;\n}\n#__an_host .an-body, #__an_host .an-reply, #__an_host .an-ta,\n#__an_host .an-empty, #__an_host .an-localnote { font-size:14px; }\n#__an_host .an-localnote.an-synced { color:#087347; }\n#__an_host .an-cact { flex-wrap:wrap; }\n#__an_host button:focus-visible, #__an_host textarea:focus-visible,\n#__an_host select:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\n#__an_host.an-readonly [data-tool]:not([data-tool=\"cursor\"]),\n#__an_host.an-readonly #__an_plus, #__an_host.an-readonly .an-replybox,\n#__an_host.an-readonly .an-editbox,\n#__an_host.an-readonly .an-cact button:not(.an-histbtn):not([title=\"Copy link to this comment\"]) { display:none; }\n/* Explicit marking preserves browser gestures until a drawing tool is chosen. */\nbody.an-review-selecting { cursor:crosshair; touch-action:pan-x pan-y pinch-zoom; }\n#__an_targetoutline { position:fixed; border:3px solid #245da8; outline:2px solid white; pointer-events:none; z-index:2147483250; box-sizing:border-box; }\n#__an_target { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); width:min(560px,calc(100vw - 24px)); max-height:45dvh; overflow:auto; z-index:2147483300; padding:12px; border:2px solid #245da8; border-radius:12px; background:var(--an-bg,#fff); color:var(--an-fg,#172b3a); display:flex; flex-wrap:wrap; gap:8px; box-sizing:border-box; }\n#__an_target strong { flex:1 0 100%; overflow-wrap:anywhere; }\n#__an_host .an-context, #__an_host .an-conflict { font-size:14px; line-height:1.5; overflow-wrap:anywhere; }\n#__an_host .an-context { margin:8px 0; }\n#__an_host .an-conflict { border:2px solid #996300; padding:10px; border-radius:8px; }\n#__an_host .an-conflict button { display:block; width:100%; margin:6px 0; white-space:normal; }\n#__an_expiry { position:fixed; left:12px; right:12px; top:12px; padding:12px; margin:0; background:#fff4d6; color:#563600; border:2px solid #996300; z-index:2147483400; }\n#__an_host .an-hbtn, #__an_host .an-x, #__an_host .an-chip { min-width:44px; min-height:44px; }\n#__an_host .an-ph { flex-wrap:wrap; gap:6px; }\n#__an_host .an-chip { font:inherit; }\n#__an_host .an-body, #__an_host .an-reply { overflow-wrap:anywhere; }\n#__an_host #__an_compose { box-sizing:border-box; max-width:calc(100vw - 16px); }\n#__an_host .an-cfoot { flex-wrap:wrap; gap:6px; }\n#__an_host .an-ta, #__an_host input, #__an_host select { font-size:16px; }\n#__an_host .an-ckbd { display:none; }\n@media (max-width:900px), (max-height:550px) {\n  #__an_host #__an_compose { position:fixed; left:8px !important; right:8px; top:auto !important; bottom: max(8px,calc(100dvh - var(--an-vh,100dvh) - var(--an-vtop,0px))); width:auto; max-width:none; max-height:calc(var(--an-vh,100dvh) - 16px); overflow-y:auto; padding:14px 14px max(14px,env(safe-area-inset-bottom)); border-radius:16px 16px 6px 6px; }\n  #__an_host #__an_compose .an-ta { min-height:72px; max-height:24dvh; }\n  #__an_host #__an_panel { top:calc(var(--an-vtop,0px) + 8px); bottom:auto; right:8px; left:8px; width:auto; height:calc(var(--an-vh,100dvh) - 16px); max-height:none; border-radius:14px; transform:translateY(110dvh); padding-bottom:env(safe-area-inset-bottom); }\n  #__an_host #__an_panel.an-open { transform:translateY(0); }\n  #__an_host #__an_bar { right:8px !important; bottom:max(8px,env(safe-area-inset-bottom)); max-height:calc(100dvh - 16px); overflow:auto; }\n  #__an_host #__an_hint { top:8px; max-width:calc(100vw - 24px); width:max-content; white-space:normal; font-size:14px; }\n  #__an_host .an-ph h2 { flex:1 0 60%; }\n  #__an_host .an-list { min-height:0; overscroll-behavior:contain; }\n}\n@media (prefers-reduced-motion:reduce) { #__an_host * { transition:none !important; scroll-behavior:auto !important; } }\n/* Keep controls readable and remove overlay chrome while composing. */\n#__an_host { --an-muted:#565665; --an-ok:#087347; }\n#__an_host.an-dark { --an-muted:#b5b5c0; --an-ok:#72ddb0; }\n#__an_host .an-cact { opacity:1; }\n#__an_host #__an_panel:not(.an-open) { display:none; }\n#__an_host:has(#__an_compose.an-show) #__an_bar,\n#__an_host:has(#__an_compose.an-show) #__an_hint { display:none; }\n#__an_host .an-ph h2 { order:0; flex:1; }\n#__an_host .an-ph .an-pcount { order:1; }\n#__an_host .an-ph .an-x { order:2; }\n#__an_host .an-ph > .an-ghost { order:3; flex:1 1 42%; }\n#__an_host #__an_compose .an-ctitle { font-size:14px; }\n#__an_host .an-deleted-draft { position:fixed; top:12px; left:12px; right:12px; max-height:40dvh; overflow:auto; padding:12px; border:2px solid #996300; background:var(--an-surface); color:var(--an-fg); z-index:2147483400; }\n@media (max-width:900px), (max-height:550px) { #__an_host #__an_root.an-popen #__an_bar { display:none; } }\nbody.an-drawing #__an_overlay *, body.an-drawing #__an_pins *,\nbody.an-review-selecting #__an_overlay *, body.an-review-selecting #__an_pins * { pointer-events:none !important; }\n#__an_host .an-original-context summary { min-height:44px; display:list-item; align-content:center; cursor:pointer; }\n#__an_host .an-original-context summary:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\nbody.an-review-browse #__an_overlay *, body.an-review-browse #__an_pins * { pointer-events:none !important; }\n#__an_host #__an_resume[hidden] { display:none; }\n#__an_host select.an-status { max-width:100%; min-width:200px; }\n";
   var ICONS = {
     cursor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.5 18 2.2-7.3L20 11.5z"/></svg>',
     highlight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h3l6-6"/><path d="M22 3l-7 7-4-4 7-7z" transform="translate(-2 2)"/><path d="M12.5 6.5l5 5"/></svg>',
@@ -2368,7 +2436,15 @@ const createController = function (host) {
     var ta = composer.querySelector('textarea');
     var saved = { draft: serialize(pendingDraft), text: ta ? ta.value : '', createdAt: pendingDraft.__draftStarted || Date.now() };
     pendingDraft.__draftStarted = saved.createdAt;
-    store.set('composer', JSON.stringify(saved));
+    store.set('composer', JSON.stringify(saved)); updateResumeDraft();
+  }
+  function hasComposerDraft() {
+    var saved; try { saved = JSON.parse(store.get('composer') || 'null'); } catch (e) {}
+    return !!(saved && saved.draft && saved.createdAt && Date.now() - saved.createdAt <= 7 * 86400000);
+  }
+  function updateResumeDraft() {
+    var button = document.getElementById('__an_resume');
+    if (button) button.hidden = !hasComposerDraft();
   }
   function resumeDraft() {
     var raw = store.get('composer'); if (!raw) return;
@@ -2532,7 +2608,7 @@ const createController = function (host) {
     tempMarks = [];
   }
   function cancelDraft() {
-    if (integration) { store.set('composer', 'null'); clearTarget(); cancelDrawing(); }
+    if (integration) { store.set('composer', 'null'); updateResumeDraft(); clearTarget(); cancelDrawing(); }
     if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true });
     pendingDraft = null;
     clearTemp();
@@ -2544,7 +2620,7 @@ const createController = function (host) {
     if (integration && draft.__draftStarted && Date.now() - draft.__draftStarted > 7 * 86400000) { expiryNotice(); return; }
     var c = createComment(draft);
     if (!c) return;
-    if (integration) store.set('composer', 'null');
+    if (integration) { store.set('composer', 'null'); updateResumeDraft(); }
     composer.classList.remove("an-show");
     clearTemp();
     state.comments.push(c);
@@ -2830,7 +2906,7 @@ const createController = function (host) {
     var header = el("div", { class: "an-ph" }, [
       el("h2", { text: "Comments" }),
       integration ? el('button', { class: 'an-ghost', text: 'Mark this page', onclick: function () { setTool('pin'); } }) : null,
-      integration ? el('button', { class: 'an-ghost', text: 'Resume draft', onclick: resumeDraft }) : null,
+      integration ? el('button', { class: 'an-ghost', id: '__an_resume', hidden: '', text: 'Resume draft', onclick: resumeDraft }) : null,
       el("span", { class: "an-pcount", id: "__an_sub", text: "0" }),
       integration ? null : el("button", { class: "an-hbtn", html: ICONS.upload, title: "Import comments from a JSON file", "aria-label": "Import comments from a JSON file", onclick: function (e) { e.stopPropagation(); pickImportFile(); } }),
       integration ? null : el("button", { class: "an-hbtn", html: ICONS.download, title: "Download comments as JSON", "aria-label": "Download comments as JSON", onclick: function (e) { e.stopPropagation(); exportComments(); } }),
@@ -2846,7 +2922,7 @@ const createController = function (host) {
     });
     search.appendChild(searchInput);
     var filters = el("div", { class: "an-filters" });
-    [["open", "Open"], ["resolved", "Resolved"], ["all", "All"]].forEach(function (f) {
+    [["open", integration ? 'Open discussions' : "Open"], ["resolved", integration ? 'Closed discussions' : "Resolved"], ["all", "All"]].forEach(function (f) {
       var ch = el("button", { type: "button", class: "an-chip" + (state.filter === f[0] ? " an-on" : ""), "data-f": f[0], text: f[1] });
       listen(ch, "click", function () {
         state.filter = f[0];
@@ -2858,6 +2934,7 @@ const createController = function (host) {
       filters.appendChild(ch);
     });
     var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);
+    if (integration) toolsRow.appendChild(el('p', { class: 'an-context', text: 'Closing a discussion does not verify a fix.' }));
     noteEl = el("div", { id: "__an_note" });
     listEl = el("div", { class: "an-list", id: "__an_list" });
     footEl = el("div", { id: "__an_foot" });
@@ -3223,6 +3300,7 @@ const createController = function (host) {
   var threadCleanups = [];
   function cleanThreads() { threadCleanups.splice(0).forEach(function (fn) { try { fn(); } catch (e) {} }); }
   function renderPanel() {
+    if (integration) updateResumeDraft();
     cleanThreads();
     if (!listEl) return;
     var drafts = captureDrafts();
@@ -3233,7 +3311,7 @@ const createController = function (host) {
       var msg = state.query
         ? "No comments match “" + esc(state.query) + "”."
         : state.filter === "resolved"
-          ? "Nothing resolved yet."
+          ? (integration ? 'No closed discussions yet.' : "Nothing resolved yet.")
           : "No comments yet.<br>Select any text, or pick a tool from the toolbar — try <kbd>H</kbd> highlight or <kbd>P</kbd> pin.";
       listEl.appendChild(el("div", { class: "an-empty" }, [
         el("div", { class: "an-eicon", html: ICONS.bubble }),
@@ -3253,7 +3331,7 @@ const createController = function (host) {
           (function(){ var d = el("span",{class:"an-dot"}); d.style.background=c.color; return d; })(),
           document.createTextNode("#" + idx + " " + (TYPE_LABEL[c.type] || c.type)),
         ]),
-        c.status === "resolved" ? el("span", { class: "an-rbadge", html: ICONS.check + "<span>Resolved</span>" })
+        c.status === "resolved" ? el("span", { class: "an-rbadge", html: ICONS.check + (integration ? '<span>Discussion closed</span>' : "<span>Resolved</span>") })
           : c.status !== "open" && STATUSES[c.status] ? el("span", { class: "an-sbadge an-s-" + c.status, text: STATUSES[c.status] }) : null,
         el("span", { class: "an-when", text: fmtTime(c.createdAt) }),
       ]);
@@ -3270,7 +3348,7 @@ const createController = function (host) {
           card.appendChild(original);
         }
         if (c.type === 'pen') card.appendChild(el('p', { class: 'an-context', text: 'Original description only. No snapshot was saved.' }));
-        decorateConflict(c, card);
+        decorateConflict(c, card); decorateDeletedReplies(c, card);
       }
       if (unread[c.id]) {
         card.classList.add("an-unread");
@@ -3366,7 +3444,7 @@ const createController = function (host) {
         el("button", { class: "an-mini", html: ICONS.reply + "<span>Reply</span>", onclick: function (e) {
           e.stopPropagation(); rbox.classList.toggle("an-show"); rin.focus();
         } }),
-        (!integration || !isReadOnly() && (isMine(c) || isReviewAuthor())) ? el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (c.resolved ? "Reopen" : "Resolve") + "</span>", onclick: function (e) {
+        (!integration || !isReadOnly() && (isMine(c) || isReviewAuthor())) ? el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (integration ? (c.resolved ? 'Reopen discussion' : 'Resolve discussion') : (c.resolved ? "Reopen" : "Resolve")) + "</span>", onclick: function (e) {
           e.stopPropagation();
           var updated = patchComment(c.id, { resolved: !c.resolved });
           if (updated) { mergeComment(updated); renderAll(); renderPanel(); }
@@ -3494,7 +3572,7 @@ const createController = function (host) {
     return updated;
   }
   function statusSelect(c) {
-    var select = el("select", { class: "an-status", "aria-label": "Status", title: "Status" });
+    var select = el("select", { class: "an-status", "aria-label": integration ? 'Discussion status' : 'Status', title: integration ? 'Discussion status' : 'Status' });
     Object.keys(STATUSES).forEach(function (key) {
       var option = el("option", { value: key, text: STATUSES[key] });
       if (key === c.status) option.selected = true;
