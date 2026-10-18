@@ -226,6 +226,37 @@ bash scripts/smoke-tarball.sh v0.1.1
 The smoke script installs that exact tag into a throwaway consumer and resolves
 both exports. CI runs it automatically on any `v*` tag push.
 
+## Review context contract (development)
+
+The optional `@visibleprojects/report-a-problem/review-contract` entry contains
+dependency-free scope validation and actor-isolated draft keys. It is safe to
+import during server rendering. It does not enable review controls, share marks
+or grant access to a page.
+
+```ts
+import { getReviewDraftKey, parseReviewScope } from '@visibleprojects/report-a-problem/review-contract';
+
+const scope = parseReviewScope({
+  appId: 'school', tenantId: null, environment: 'test', campaignId: 'october',
+  pagePath: '/dashboard/parent-documents', resourceId: null,
+});
+if (scope) {
+  const key = getReviewDraftKey(verifiedActorId, scope);
+}
+```
+
+All scope fields are explicit. `null` is different from a tenant/resource named
+`null`. Page paths are canonical ASCII paths with no query, fragment, percent
+encoding, repeated/trailing slash or dot segment; the host maps routing context
+to this path and supplies private record identity separately. Do not use a
+display name for `verifiedActorId`. Namespace keys contain opaque context IDs,
+not tokens, and are never proof of authorisation.
+
+Contract version 1 fixtures live in `test/fixtures/review-contract-v1.json` and
+must remain identical to the service's `tests/fixtures/review-contract-v1.json`.
+The existing root import does not load review code. Renderer and shared-review
+integration are separate work; this development entry is not a published release.
+
 ## License
 
 MIT. See `LICENSE`.
