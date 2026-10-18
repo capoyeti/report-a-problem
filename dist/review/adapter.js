@@ -8,7 +8,8 @@ async function loadRenderer() {
 }
 /** One lifecycle owner per browser document. Superseded async mounts cannot win. */
 const owners = new WeakMap();
-export function createReviewAdapter(config, host = window) {
+export function createReviewAdapter(settings, host = window) {
+    const config = { ...settings, scope: { ...settings.scope }, sources: settings.sources?.map(source => ({ ...source })) };
     let renderer = null;
     let disposed = false;
     let mounted = false;

@@ -59,3 +59,17 @@ describe('review lifecycle owner', () => {
     await expect(adapter.mount()).rejects.toThrow('stopped');
   });
 });
+
+
+describe('immutable lifecycle context', () => {
+  it('does not redirect local drafts when a caller later mutates its scope object', async () => {
+    const mutable: ReviewAdapterConfig['scope'] = { ...scope };
+    const { adapter, renderer } = setup('rhona', { scope: mutable });
+    mutable.pagePath = '/other'; mutable.resourceId = 'different-record';
+    await adapter.mount();
+    const configured = vi.mocked(renderer.init).mock.calls[0][0];
+    expect(configured.page).toBe('/');
+    expect((configured.integration as any).storageNamespace).not.toContain('different-record');
+    expect(adapter.scope.resourceId).toBeNull();
+  });
+});

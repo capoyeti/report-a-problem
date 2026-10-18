@@ -19,7 +19,8 @@ async function loadRenderer(): Promise<ReviewRendererModule> {
 
 /** One lifecycle owner per browser document. Superseded async mounts cannot win. */
 const owners = new WeakMap<Window, { stop(): void }>();
-export function createReviewAdapter(config: ReviewAdapterConfig, host: Window = window) {
+export function createReviewAdapter(settings: ReviewAdapterConfig, host: Window = window) {
+  const config = { ...settings, scope: { ...settings.scope }, sources: settings.sources?.map(source => ({ ...source })) };
   let renderer: ReviewRenderer | null = null;
   let disposed = false;
   let mounted = false;
