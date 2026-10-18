@@ -1,6 +1,6 @@
 {
   "result": "passed",
-  "testedAt": "2026-10-18T19:45:28.482Z",
+  "testedAt": "2026-10-18T20:14:11.433Z",
   "browser": "153.0.8010.12",
   "headed": true,
   "service": "disposable loopback Next/PostgREST/PostgreSQL17",
@@ -29,11 +29,6 @@
       "status": 200
     },
     {
-      "method": "GET",
-      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
-      "status": 200
-    },
-    {
       "method": "POST",
       "path": "/api/review/session",
       "status": 200
@@ -44,8 +39,13 @@
       "status": 200
     },
     {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
       "method": "PUT",
-      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/c1tl89o91btvnyhgjo1r4",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/ctpfxkh1haigax1vwsg9s",
       "status": 201
     },
     {
@@ -55,7 +55,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/c1tl89o91btvnyhgjo1r4/replies",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/ctpfxkh1haigax1vwsg9s/replies",
       "status": 201
     },
     {
@@ -65,52 +65,52 @@
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/promotion",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/promotion",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
@@ -120,27 +120,27 @@
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
@@ -160,57 +160,17 @@
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
       "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/retest",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/retest",
       "status": 200
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
-      "status": 200
-    },
-    {
-      "method": "POST",
-      "path": "/api/review/session",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
-      "status": 200
-    },
-    {
-      "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
-      "status": 200
-    },
-    {
-      "method": "POST",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/retest",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 200
     },
     {
@@ -225,12 +185,52 @@
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/retest",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
       "status": 403
     },
     {
       "method": "GET",
-      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/ctpfxkh1haigax1vwsg9s/finding",
       "status": 403
     }
   ]

@@ -1,16 +1,16 @@
 # Real local service browser proof
 
 18 October 2026, headed Chromium 153.0.8010.12. The final run completed at
-19:45:28 UTC with 42 actual same-origin gateway operations and no page errors.
+20:14:11 UTC with 42 actual same-origin gateway operations and no page errors.
 Only synthetic users and school-like controls were used. Screens were inspected
 before inclusion. No real parent records or source PDFs are present.
 
-The browser used package source d5ef6ab7fe3bf5a17f697ab168e875d4055da334,
+The browser used package source 17350fbfeb0f6d928e875370cbda3c81971226d3,
 including ordinary-report reliability carried forward from PR6. The host fixture
 used the actual shared server helper, cookie authentication and current
-resource checks. It forwarded to error-triage-service c78fac545115232e20283f68ac3ece33273d7a22
-running real Next routes, PostgREST and disposable PostgreSQL17. The later
-fixture-image-only correction b42cbf4 does not change those service contracts.
+resource checks. It forwarded to error-triage-service d0bfbd2b2abf5d7987484c833ca1ccb1a10565b0
+running real Next routes, the digest-pinned official PostgREST 14.18 image and
+disposable PostgreSQL 17. Its functional API source remains c78fac5.
 
 ## What passed
 
@@ -59,7 +59,7 @@ containers/network are removed.
 ## Limits
 
 This uses a thin synthetic host, not the Montessori auth implementation. Its
-separate consuming-app proof covers that implementation on React19/Next16.
+separate consuming-app proof covers that implementation on React 19/Next 16.
 There was no actual code repair, deployment or external GitHub/Plane interaction
 in this browser journey. The PR URL, test build and target were synthetic.
 Delivery/worker flags stayed off; canonical report reservation is not Plane
