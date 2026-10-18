@@ -127,7 +127,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       // A lost acknowledgement must retry the exact operation before a new one.
       if (!op) { op = { key: cfg.host.crypto.randomUUID(), body: JSON.stringify({ expectedVersion: snapshot.finding.version, ...payload }), path }; keepPending(id, op); }
       busy = true; status.textContent = 'Sharing this change...';
-      content.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
+      content.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('button,input,textarea,select').forEach(b => { b.disabled = true; });
       try {
         const response = await cfg.request(`${cfg.gateway}/v1/reviews/${cfg.scope.campaignId}/threads/${id}/${op.path}`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': op.key }, body: op.body,
@@ -149,7 +149,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
         if (alive()) { render(); status.textContent = 'Could not confirm delivery. Your form is kept. Retry the same change to check it safely.'; }
       } finally {
         busy = false;
-        if (alive()) content.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
+        if (alive()) content.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('button,input,textarea,select').forEach(b => { b.disabled = false; });
       }
     }
     function formField(form: HTMLElement, title: string, key: string, initial: string, fields: Record<string, string>, multiline = false, required = false) {

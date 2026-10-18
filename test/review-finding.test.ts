@@ -137,3 +137,20 @@ describe('sidecar drafts and contextual test links', () => {
     expect(link.href).not.toContain('resourceId');
   });
 });
+
+
+describe('acknowledgement draft boundary', () => {
+  it('locks every editable field while a submitted operation is awaiting acknowledgement', async () => {
+    const { card, request } = setup(); await loaded();
+    let accept!: (response: Response) => void;
+    request.mockImplementationOnce(async () => new Promise<Response>(resolve => { accept = resolve; }));
+    const form = card.querySelector<HTMLFormElement>('form[aria-label="Finding details"]')!;
+    const fields = form.querySelectorAll('textarea'); fields[0].value = 'First version sent'; fields[1].value = 'Actual result'; fields[2].value = 'Impact';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await vi.waitFor(() => expect(accept).toBeTypeOf('function'));
+    expect([...card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')].every(input => input.disabled)).toBe(true);
+    expect(card.textContent).toContain('Sharing this change');
+    accept(new Response(JSON.stringify({ finding: { version: 5 } }), { status: 200 }));
+    await vi.waitFor(() => expect([...card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')].every(input => !input.disabled)).toBe(true));
+  });
+});

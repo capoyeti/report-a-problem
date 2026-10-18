@@ -165,7 +165,7 @@ export function createFindingPanels(cfg) {
             }
             busy = true;
             status.textContent = 'Sharing this change...';
-            content.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            content.querySelectorAll('button,input,textarea,select').forEach(b => { b.disabled = true; });
             try {
                 const response = await cfg.request(`${cfg.gateway}/v1/reviews/${cfg.scope.campaignId}/threads/${id}/${op.path}`, {
                     method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': op.key }, body: op.body,
@@ -206,7 +206,7 @@ export function createFindingPanels(cfg) {
             finally {
                 busy = false;
                 if (alive())
-                    content.querySelectorAll('button').forEach(b => { b.disabled = false; });
+                    content.querySelectorAll('button,input,textarea,select').forEach(b => { b.disabled = false; });
             }
         }
         function formField(form, title, key, initial, fields, multiline = false, required = false) {
