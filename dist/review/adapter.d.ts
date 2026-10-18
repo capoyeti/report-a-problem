@@ -9,7 +9,7 @@ export interface ReviewAdapterConfig extends Omit<ReviewTransportConfig, 'origin
     onSync?: (state: ReviewSyncState) => void;
     loadRenderer?: () => Promise<ReviewRendererModule>;
 }
-export declare function createReviewAdapter(config: ReviewAdapterConfig, host?: Window): {
+export declare function createReviewAdapter(settings: ReviewAdapterConfig, host?: Window): {
     mount: () => Promise<void>;
     stop: () => void;
     open: () => void | undefined;
