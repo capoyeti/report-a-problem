@@ -98,3 +98,24 @@ headed with `npx tsx scripts/review-renderer-verify.ts`. The earlier spike harne
 is coordinator-owned and requires the new Use this target confirmation step when
 integrated. No normal-report source, host adapter, transport or gateway is changed
 by this renderer slice.
+
+Cold-review follow-up:
+
+- Integrated status labels and actions explicitly describe discussion closure,
+  reopening, progress and decline. Closing a discussion does not verify a fix.
+  Nonintegrated upstream labels remain unchanged.
+- Resume draft appears only while a valid saved composer exists. A nonnull local
+  commit clears composer recovery while preserving queued comment words. Rejected
+  input and held/offline operations retain their recovery paths.
+- A reply endpoint 410 triggers an authoritative comment-list reread. If the
+  parent remains live, only the deleted reply operation is removed; other queued
+  work, operation keys and edit conflict bases survive. Deleted reply IDs cannot
+  reappear from stale reads. Refused words remain in a copy/discard recovery card.
+  A failed/inconsistent reread keeps the operation held; only confirmed parent
+  absence permits a parent tombstone.
+- Integrated storage errors explain that the page must stay open until sharing,
+  and that closing can lose unshared work. They do not promise disabled exports.
+  Generic sync errors describe a sharing failure without assuming login expired.
+- Successful complete snapshots and 304 responses honor X-Review-Poll-After in
+  milliseconds, with a five-second/configured-interval floor. No transport changes
+  are needed. Missing or malformed hints preserve the normal polling cadence.

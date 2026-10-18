@@ -145,6 +145,9 @@ async function main() {
     assert.equal(await desktop.locator('#document-result').textContent(), 'The document has not been opened.');
     await post(desktop, 'The fee document action needs review.');
     await noOverflow(desktop);
+    assert.equal(await desktop.getByRole('button', { name: 'Resume draft', exact: true }).isVisible(), false);
+    await desktop.getByRole('button', { name: 'Resolve discussion', exact: true }).waitFor();
+    await desktop.getByText('Closing a discussion does not verify a fix.', { exact: true }).waitFor();
     const first = [...comments.values()][0];
     assert(first.geom.selector.startsWith('[data-review-id='));
     assert.equal(await desktop.locator(first.geom.selector).count(), 1);
@@ -153,12 +156,14 @@ async function main() {
     await other.bringToFront(); const visibleStart = Date.now();
     await other.getByText(first.text, { exact: true }).waitFor({ timeout: 10_000 });
     const visibilityMs = Date.now() - visibleStart;
+    assert.deepEqual(await other.getByRole('combobox', { name: 'Discussion status', exact: true }).locator('option').allTextContents(), ['Open discussion', 'Discussion in progress', 'Discussion closed', 'Discussion declined']);
     await other.locator('.an-card .an-cact').getByRole('button', { name: 'Reply', exact: true }).click();
     await other.getByRole('textbox', { name: 'Reply text', exact: true }).fill('Second reviewer reply.');
     await other.locator('.an-replybox').getByRole('button', { name: 'Reply', exact: true }).click();
     await waitFor(other, () => (window as any).reviewFixture.syncState().state === 'idle');
     await other.screenshot({ path: path.join(output, 'shared-1280.png') });
     checks.push('stable selector, no target activation, original context, canonical URL, two-browser shared reply within ten seconds');
+    checks.push('discussion-scoped actions and lead options, fix-verification explanation, no Resume action after committed comment');
     await desktop.bringToFront(); await desktop.locator('#refresh-review').click();
     await desktop.getByText('Second reviewer reply.', { exact: false }).waitFor();
     // Stable identity survives DOM id and text changes; context remains the original.
@@ -259,6 +264,10 @@ async function main() {
     await mobile.getByText('Write a description of 1 to 5,000 characters before sharing.', { exact: true }).waitFor();
     assert.equal(comments.size, countBefore); assert.equal((await mobile.locator('#__an_compose textarea').inputValue()).length, 5001);
     await post(mobile, 'Phone draft shared after rotation.');
+    assert.equal(await mobile.getByRole('button', { name: 'Resume draft', exact: true }).isVisible(), false);
+    const storedComposer = await mobile.evaluate(() => Object.entries(localStorage).filter(([key]) => key.endsWith(':composer')).map(([, value]) => JSON.parse(value).value));
+    assert(storedComposer.every(value => value === 'null')); // Queued records remain separate from the composer.
+    checks.push('rejected composer preserves text and Resume; successful commit clears composer recovery');
     checks.push('390x844 touch swipe scroll, tap and parent confirmation, 44px actions, reduced viewport, 844x390 rotation, close/resume, 5001 character rejection');
     // Drawing is explicit; Escape and pointercancel remove the temporary stroke.
     async function draw(tool: 'pen' | 'rect' | 'circle', cancel?: 'Escape' | 'pointercancel') {

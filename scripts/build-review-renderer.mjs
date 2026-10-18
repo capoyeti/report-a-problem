@@ -513,6 +513,116 @@ patch('    buildUI();\n    ensureOverlay();', `    buildUI();
     if (integration) JSON.parse(store.get('deleted-drafts') || '[]').forEach(showDeletedDraft);
     ensureOverlay();`);
 patch('    overlay.setAttribute("width", w);', '    if (integration) w = document.documentElement.clientWidth;\n    overlay.setAttribute("width", w);');
+// Discussion state is independent of finding progress and fix verification.
+patch('  var STATUSES = { open: "Open", in_progress: "In progress", resolved: "Resolved", wont_fix: "Won’t fix" };', `  var STATUSES = integration ? { open: 'Open discussion', in_progress: 'Discussion in progress', resolved: 'Discussion closed', wont_fix: 'Discussion declined' }
+    : { open: "Open", in_progress: "In progress", resolved: "Resolved", wont_fix: "Won’t fix" };`);
+patch('(c.resolved ? "Reopen" : "Resolve")', `(integration ? (c.resolved ? 'Reopen discussion' : 'Resolve discussion') : (c.resolved ? "Reopen" : "Resolve"))`);
+patch('html: ICONS.check + "<span>Resolved</span>"', `html: ICONS.check + (integration ? '<span>Discussion closed</span>' : "<span>Resolved</span>")`);
+patch('var select = el("select", { class: "an-status", "aria-label": "Status", title: "Status" });', `var select = el("select", { class: "an-status", "aria-label": integration ? 'Discussion status' : 'Status', title: integration ? 'Discussion status' : 'Status' });`);
+patch('[["open", "Open"], ["resolved", "Resolved"], ["all", "All"]]', `[["open", integration ? 'Open discussions' : "Open"], ["resolved", integration ? 'Closed discussions' : "Resolved"], ["all", "All"]]`);
+patch('          ? "Nothing resolved yet."', `          ? (integration ? 'No closed discussions yet.' : "Nothing resolved yet.")`);
+patch('    var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);', `    var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);
+    if (integration) toolsRow.appendChild(el('p', { class: 'an-context', text: 'Closing a discussion does not verify a fix.' }));`);
+// Resume is a recovery action only when a real composer draft exists.
+patch('  function resumeDraft() {', `  function hasComposerDraft() {
+    var saved; try { saved = JSON.parse(store.get('composer') || 'null'); } catch (e) {}
+    return !!(saved && saved.draft && saved.createdAt && Date.now() - saved.createdAt <= 7 * 86400000);
+  }
+  function updateResumeDraft() {
+    var button = document.getElementById('__an_resume');
+    if (button) button.hidden = !hasComposerDraft();
+  }
+  function resumeDraft() {`);
+patch("text: 'Resume draft', onclick: resumeDraft", "id: '__an_resume', hidden: '', text: 'Resume draft', onclick: resumeDraft");
+patch("    store.set('composer', JSON.stringify(saved));", "    store.set('composer', JSON.stringify(saved)); updateResumeDraft();");
+patch("    if (integration) store.set('composer', 'null');", "    if (integration) { store.set('composer', 'null'); updateResumeDraft(); }");
+patch("store.set('composer', 'null'); clearTarget();", "store.set('composer', 'null'); updateResumeDraft(); clearTarget();");
+patch('  function renderPanel() {\n    cleanThreads();', '  function renderPanel() {\n    if (integration) updateResumeDraft();\n    cleanThreads();');
+// Integrated builds cannot offer the upstream JSON export as storage recovery.
+patch('  var UNSAVED_MSG = "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";', `  var UNSAVED_MSG = integration ? 'This browser cannot save your draft on this device. Keep this page open until your changes are shared. Closing it can lose unshared work.'
+    : "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";`);
+patch('toast("Storage full — export your comments before adding more.",', `toast(integration ? 'Storage is full. Keep this page open until your changes are shared. Closing it can lose unshared work.' : "Storage full — export your comments before adding more.",`);
+patch('toast("Storage is unavailable — your comments are kept on screen only.",', `toast(integration ? 'Storage is unavailable. Keep this page open until your changes are shared. Closing it can lose unshared work.' : "Storage is unavailable — your comments are kept on screen only.",`);
+patch('    error: "Not signed in to the review — changes are kept on this device.",', `    error: integration ? 'Could not share. Your draft is kept here. Compare or retry to continue.' : "Not signed in to the review — changes are kept on this device.",`);
+// A 410 from a reply endpoint is not proof that its parent was deleted.
+patch("    if (integration && status === 410 && op.t !== 'del') {", `    if (integration && status === 410 && (op.t === 'reply' || op.t === 'unreply') && !r.parentGoneVerified) {
+      return reconcileGoneReply(op, r);
+    }
+    if (integration && status === 410 && op.t !== 'del') {`);
+patch('    c.page = localPage(w.page);', `    if (integration) {
+      var deletedReplies = JSON.parse(store.get('reply-tombstones') || '{}')[c.id] || {};
+      c.replies = c.replies.filter(function (reply) { return !deletedReplies[reply.id]; });
+    }
+    c.page = localPage(w.page);`);
+patch('  function showDeletedDraft(c) {', `  function reconcileGoneReply(op, response) {
+    markOp(op, { held: true, replyGone: true }); sync.held = true; syncChanged(); renderPanel();
+    settleWaiters(new Error('Could not share this reply. Its draft is kept while the discussion is checked.'));
+    return apiFetch('GET', '/comments?page=' + encodeURIComponent(wirePage(PAGE))).then(function (r) {
+      if (destroyed) return;
+      if (!r.res.ok || !r.data || !Array.isArray(r.data.comments)) throw new Error('unavailable');
+      var current = r.data.comments.find(function (c) { return c.id === op.id; });
+      if (!current) {
+        markOp(op, { held: false, replyGone: false }); releaseHold();
+        handleResponse(op, Object.assign({}, response, { parentGoneVerified: true }));
+        releaseHold(); return;
+      }
+      var parent = fromWire(current);
+      if (!parent || parent.page !== PAGE) throw new Error('unavailable');
+      var replyId = op.t === 'reply' ? op.r.id : op.rid;
+      // An inconsistent snapshot is insufficient evidence to discard any operation.
+      if (current.replies.some(function (reply) { return reply.id === replyId; })) throw new Error('unavailable');
+      var tombstones = JSON.parse(store.get('reply-tombstones') || '{}');
+      (tombstones[op.id] = tombstones[op.id] || {})[replyId] = true;
+      store.set('reply-tombstones', JSON.stringify(tombstones));
+      if (op.t === 'reply' && op.r.text) {
+        var drafts = JSON.parse(store.get('deleted-reply-drafts') || '[]');
+        if (!drafts.some(function (draft) { return draft.key === op.key; })) drafts.push({ key: op.key, threadId: op.id, text: op.r.text });
+        store.set('deleted-reply-drafts', JSON.stringify(drafts));
+      }
+      dropOps(function (other) { return other.key === op.key; });
+      var d = dbRead(), local = d.comments.find(function (c) { return c.id === op.id; });
+      if (local) local.replies = local.replies.filter(function (reply) { return reply.id !== replyId; });
+      dbWrite(d); sync.acks++; mergeServerPage(r.data.comments); releaseHold(); renderPanel(); scheduleFlush(0);
+      toast('A reply was deleted. The discussion is still here; your words are kept in its thread.');
+    }).catch(function () {
+      if (!destroyed) { sync.held = true; syncChanged(); renderPanel(); toast('Could not check this discussion. Your reply and other changes are kept.'); }
+    });
+  }
+  function decorateDeletedReplies(c, card) {
+    JSON.parse(store.get('deleted-reply-drafts') || '[]').filter(function (draft) { return draft.threadId === c.id; }).forEach(function (draft) {
+      var box = el('section', { class: 'an-conflict', 'aria-label': 'Deleted reply recovery' });
+      box.appendChild(el('p', { text: 'This reply was deleted. These words are kept for you and will not be shared automatically. Copy them into a new reply if you still want to discuss them.' }));
+      box.appendChild(el('p', { text: draft.text }));
+      box.appendChild(el('button', { class: 'an-ghost', text: 'Copy kept reply words', onclick: function (e) { e.stopPropagation(); copyText(draft.text, 'Reply words copied'); } }));
+      box.appendChild(el('button', { class: 'an-ghost', text: 'Discard kept reply words', onclick: function (e) {
+        e.stopPropagation(); store.set('deleted-reply-drafts', JSON.stringify(JSON.parse(store.get('deleted-reply-drafts') || '[]').filter(function (d) { return d.key !== draft.key; }))); renderPanel();
+      } }));
+      listen(box, 'click', function (e) { e.stopPropagation(); }); card.appendChild(box);
+    });
+  }
+  function showDeletedDraft(c) {`);
+patch('        decorateConflict(c, card);', '        decorateConflict(c, card); decorateDeletedReplies(c, card);');
+patch('    if (!held.length) return;\n    var box', `    if (!held.length) return;
+    var uncertainReply = held.find(function (o) { return o.replyGone; });
+    if (uncertainReply) {
+      var check = el('section', { class: 'an-conflict' }, [el('p', { text: 'Could not confirm whether the reply or its discussion was deleted. Your words and other changes are kept.' })]);
+      check.appendChild(el('button', { class: 'an-ghost', text: 'Check discussion again', onclick: function (e) {
+        e.stopPropagation(); reconcileGoneReply(uncertainReply, { res: { status: 410 }, data: {} });
+      } })); card.appendChild(check); return;
+    }
+    var box`);
+// A successful complete snapshot may ask the integrated renderer to poll less often.
+patch('  function poll() {', `  function applyPollAfter(response) {
+    if (!integration) return;
+    var value = response.headers.get('X-Review-Poll-After'), delay = value === null ? NaN : Number(value);
+    sync.pollAfter = Math.max(5000, CFG.pollInterval, Number.isSafeInteger(delay) && delay > 0 ? Math.min(delay, 2147483647) : 0);
+    clearTimeout(sync.pollTimer); sync.pollTimer = setTimeout(poll, sync.pollAfter);
+  }
+  function poll() {`);
+patch('sync.pollTimer = setTimeout(poll, CFG.pollInterval);', 'sync.pollTimer = setTimeout(poll, sync.pollAfter || CFG.pollInterval);');
+patch('if (status === 304) { sync.offline = false;', 'if (status === 304) { applyPollAfter(r.res); sync.offline = false;');
+patch('        sync.loaded = true;', '        applyPollAfter(r.res); sync.loaded = true;');
+
 // A factory prevents a stale concurrent mount from destroying a newer controller.
 patch('export { init, destroy };', 'export { init, destroy, createController };');
 const output = path.join(root, 'dist/review/vendor');
