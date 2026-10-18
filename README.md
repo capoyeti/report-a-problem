@@ -253,16 +253,18 @@ not tokens, and are never proof of authorisation.
 
 Contract version 1 fixtures live in `test/fixtures/review-contract-v1.json` and
 must remain identical to the service's `tests/fixtures/review-contract-v1.json`.
-The existing root import does not load review code. Renderer and shared-review
-integration are separate work; this development entry is not a published release.
+The existing root import does not load review code. The optional renderer,
+server gateway and finding workflow are documented in
+[Shared page review pilot](docs/shared-page-review.md). This candidate is not a
+published review release.
 
 ## License
 
 MIT. See `LICENSE`.
 
-## Candidate 0.1.4 reliability contract
+## Preserved reporting reliability contract
 
-This candidate has not been released. Keep published dependency pins until the coordinator reviews and releases it. Strict filing proof is a deliberate compatibility correction: update mocks or custom report routes to return `ok:true`, `filed:true` and a nonempty string `ref` or `reportId`. A service success must contain `ref` or `report_id`. Missing proof, no-op and malformed responses never show a success or promise an email. Reporter-copy wording requires `delivered.reporter_copy === true`.
+The review candidate preserves the 0.1.4 reliability branch. Keep published dependency pins until the coordinator reviews and releases this candidate. Strict filing proof is a deliberate compatibility correction: update mocks or custom report routes to return `ok:true`, `filed:true` and a nonempty string `ref` or `reportId`. A service success must contain `ref` or `report_id`. Missing proof, no-op and malformed responses never show a success or promise an email. Reporter-copy wording requires `delivered.reporter_copy === true`.
 
 `verifySession` can return a `ReportProblemSessionFailure` with optional `status: 401 | 403 | 503`. Omission defaults to 401. Use 403 for an authoritative disable and 503 for an unavailable acceptance check. Thrown checks become controlled 503. Perform fresh authority checks in this consumer callback, independently of cached UI visibility.
 

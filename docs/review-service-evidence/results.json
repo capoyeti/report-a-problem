@@ -1,0 +1,237 @@
+{
+  "result": "passed",
+  "testedAt": "2026-10-18T19:45:28.482Z",
+  "browser": "153.0.8010.12",
+  "headed": true,
+  "service": "disposable loopback Next/PostgREST/PostgreSQL17",
+  "checks": [
+    "two cookie-authenticated reviewers",
+    "real create/read/reply",
+    "server identity stamps",
+    "component does not activate",
+    "structured finding saved",
+    "canonical report reserved",
+    "copy confirmation survives responsive redraw",
+    "Plane delivery off",
+    "host access revocation destroys overlay",
+    "verified assignment",
+    "proposed fix recorded",
+    "stale-build retest blocked",
+    "failed retest reopens with history",
+    "registered new-build retest passed without erasing failure",
+    "no browser external requests",
+    "no page errors"
+  ],
+  "traces": [
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/c1tl89o91btvnyhgjo1r4",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments/c1tl89o91btvnyhgjo1r4/replies",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/promotion",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 304
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/retest",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/retest",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/session",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/reviews/30000000-0000-4000-8000-000000000001/threads/c1tl89o91btvnyhgjo1r4/finding",
+      "status": 403
+    },
+    {
+      "method": "GET",
+      "path": "/api/review/v1/annotate/reviews/30000000-0000-4000-8000-000000000001/comments",
+      "status": 403
+    }
+  ]
+}

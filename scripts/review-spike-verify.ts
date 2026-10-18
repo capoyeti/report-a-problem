@@ -109,6 +109,7 @@ async function main() {
     await waitFor(chad, () => (window as any).reviewFixture?.syncState().state === 'idle');
     await rhona.locator('#__an_bar [data-tool=pin]').click();
     await rhona.locator('#fee-document').click();
+    await rhona.getByRole('button', { name: 'Use this target', exact: true }).click();
     assert.equal(await rhona.locator('#document-result').textContent(), 'The document has not been opened.');
     await rhona.locator('#__an_compose textarea').fill('The next-year fee document should open here.');
     await rhona.locator('#__an_compose').getByRole('button', { name: 'Comment', exact: true }).click();
