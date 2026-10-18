@@ -144,12 +144,31 @@ describe('complete shared snapshots', () => {
   it('allows sidecar commands only inside the current campaign', async () => {
     const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session())).mockResolvedValue(json({}));
     const t = createReviewTransport(config(f));
-    expect((await t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding')).status).toBe(200);
+    expect((await t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding', { method: 'POST', body: '{}' })).status).toBe(200);
     await expect(t.request(origin + '/api/review/v1/reviews/other/threads/c1/finding')).rejects.toThrow('outside'); t.stop();
   });
   it('snapshots configuration instead of letting a mutable scope change a grant', async () => {
     const cfg = config(vi.fn<typeof fetch>().mockResolvedValue(json(session()))); cfg.scope = { ...scope };
     const t = createReviewTransport(cfg); cfg.scope.pagePath = '/private';
     expect((await t.getSession()).scope.pagePath).toBe('/documents'); t.stop();
+  });
+});
+
+describe('complete retest history', () => {
+  it('drains attempts without presenting a partial history', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(json({ finding: { version: 2 }, retests: [{ result: 'fail' }], retestsComplete: false, nextRetestCursor: 'cursor-r' }))
+      .mockResolvedValueOnce(json({ finding: { version: 2 }, retests: [{ result: 'pass' }], retestsComplete: true, nextRetestCursor: null }));
+    const t = createReviewTransport(config(f));
+    const data = await (await t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding')).json();
+    expect(data.retests).toEqual([{ result: 'fail' }, { result: 'pass' }]);
+    expect(String(f.mock.calls[2][0])).toContain('retestCursor=cursor-r'); t.stop();
+  });
+  it('rejects changed finding versions between history pages', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(json({ finding: { version: 2 }, retests: [], retestsComplete: false, nextRetestCursor: 'cursor-r' }))
+      .mockResolvedValueOnce(json({ finding: { version: 3 }, retests: [], retestsComplete: true }));
+    const t = createReviewTransport(config(f));
+    await expect(t.request(origin + '/api/review/v1/reviews/october/threads/c1/finding')).rejects.toThrow('changed'); t.stop();
   });
 });
