@@ -199,10 +199,32 @@ patch('      characterData: true, attributes: true, attributeFilter: ["class", "
 patch('    ensureHost(); renderAll();', '    ensureHost(); renderAll(); if (integration) renderPanel();');
 patch('rt = setTimeout(renderAll, 150);', 'rt = setTimeout(function () { renderAll(); if (integration) renderPanel(); }, 150);');
 // Full key isolation is supplied by the adapter. Each local value has a fixed TTL.
-patch('return window.localStorage.getItem(integration ? integration.storageNamespace + ":" + k : k);', `var raw = window.localStorage.getItem(integration ? integration.storageNamespace + ':' + k : k);
+patch('  var store = {', `  function expiredDraftWork(key, raw) {
+    var value; try { value = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return false; }
+    function words(text) { return typeof text === 'string' && !!text.trim(); }
+    if (key === 'composer') return !!(value && value.draft && (words(value.text) || words(value.draft.text) || value.draft.geom || value.draft.anchor));
+    if (key === 'thread-drafts') return !!(value && typeof value === 'object' && Object.keys(value).some(function (id) {
+      var draft = value[id]; return draft && (draft.reply && words(draft.reply.value) || draft.edit && words(draft.edit.value));
+    }));
+    if (key === 'deleted-drafts' || key === 'deleted-reply-drafts') return Array.isArray(value) && value.some(function (draft) {
+      return draft && (words(draft.text) || Array.isArray(draft.replies) && draft.replies.some(function (reply) { return reply && words(reply.text); }));
+    });
+    if (key.indexOf('annotate:queue:') === 0) return Array.isArray(value) && value.some(function (op) {
+      return op && ['put', 'del', 'reply', 'unreply'].indexOf(op.t) >= 0 && typeof op.id === 'string' && typeof op.key === 'string';
+    });
+    return false;
+  }
+  var store = {`);
+
+patch('return window.localStorage.getItem(integration ? integration.storageNamespace + ":" + k : k);', `var fullKey = integration ? integration.storageNamespace + ':' + k : k;
+      var raw = window.localStorage.getItem(fullKey);
       if (!integration || raw === null) return raw;
       var saved; try { saved = JSON.parse(raw); } catch (e) {}
-      if (!saved || saved.reviewDraft !== 1 || Date.now() > saved.expiresAt) { expiryNotice(); return null; }
+      if (!saved || saved.reviewDraft !== 1 || !Number.isFinite(saved.expiresAt) || Date.now() >= saved.expiresAt) {
+        try { window.localStorage.removeItem(fullKey); } catch (e) {}
+        if (expiredDraftWork(k, saved && saved.reviewDraft === 1 ? saved.value : raw)) expiryNotice();
+        return null;
+      }
       return saved.value;`);
 patch('window.localStorage.setItem(integration ? integration.storageNamespace + ":" + k : k, v);', `window.localStorage.setItem(integration ? integration.storageNamespace + ':' + k : k,
         integration ? JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() + 7 * 86400000, value: v }) : v);`);
@@ -214,7 +236,7 @@ patch('  var UNSAVED_MSG =', `  var expiryShown = false;
   var UNSAVED_MSG =`);
 patch('    op.key = idemKey();', '    op.key = idemKey(); if (integration) op.createdAt = Date.now();');
 patch('key: idemKey(), nb: Date.now() + (holdMs || 0)', 'key: idemKey(), createdAt: Date.now(), nb: Date.now() + (holdMs || 0)');
-patch('      return o && OP_TYPES[o.t] === 1', `      if (integration && o && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
+patch('      return o && OP_TYPES[o.t] === 1', `      if (integration && o && OP_TYPES[o.t] === 1 && typeof o.id === 'string' && typeof o.key === 'string' && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
       return o && OP_TYPES[o.t] === 1`);
 // A held operation persists through reload, refresh, submit and edits.
 patch('    sync.held = false;\n    return new Promise', `    if (integration && (sync.held || readQueue().some(function (o) { return o.held; }))) return Promise.reject(new Error('Compare the saved draft before retrying.'));
@@ -343,7 +365,13 @@ replaceSection('  function onDown(e) {', '  function onMove(e) {', `  var tapSta
   }, true);
   listen(document, 'keydown', function (e) {
     if (!integration || !state.enabled) return;
-    if (e.key === 'Escape') { cancelDrawing(); clearTarget(); if (pendingDraft) cancelDraft(); setTool('cursor'); return; }
+    if (e.isComposing) return;
+    if (e.key === 'Escape') {
+      cancelDrawing(); clearTarget();
+      if (pendingDraft) { e.preventDefault(); e.stopPropagation(); closeComposerDraft(); }
+      else setTool('cursor');
+      return;
+    }
     if (state.tool === 'pin' && !isOurs(e.target) && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault(); e.stopImmediatePropagation(); chooseTarget(e.target);
     }
@@ -380,7 +408,13 @@ patch('    document.body.classList.toggle("an-drawing", drawingTool);', `    doc
 patch('pin: "Click anywhere to drop a pin"', 'pin: "Tap or focus a target, then confirm. Swipe to scroll."');
 patch('    if (!state.enabled) return;\n    if (drawing) return;', '    if (!state.enabled || integration && (state.tool !== "highlight" || isOurs(e.target))) return;\n    if (drawing) return;');
 patch('      if (isOurs(range.commonAncestorContainer)) return;', '      if (isOurs(range.commonAncestorContainer) || integration && privateRange(range)) return;');
-patch('  function ensureComposer() {', `  function saveComposerDraft() {
+patch('  function ensureComposer() {', `  function closeComposerDraft() {
+    saveComposerDraft();
+    if (composer) composer.classList.remove('an-show');
+    setTool('cursor');
+    if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true });
+  }
+  function saveComposerDraft() {
     if (!integration || !pendingDraft || !composer) return;
     var ta = composer.querySelector('textarea');
     var saved = { draft: serialize(pendingDraft), text: ta ? ta.value : '', createdAt: pendingDraft.__draftStarted || Date.now() };
@@ -388,12 +422,10 @@ patch('  function ensureComposer() {', `  function saveComposerDraft() {
     store.set('composer', JSON.stringify(saved));
   }
   function resumeDraft() {
-    var raw = store.get('composer'); if (!raw) return;
-    var saved; try { saved = JSON.parse(raw); } catch (e) { return; }
-    if (!saved || !saved.draft || !saved.createdAt || Date.now() - saved.createdAt > 7 * 86400000) { expiryNotice(); return; }
+    var saved = readComposerDraft(); if (!saved) return;
     saved.draft.__draftStarted = saved.createdAt;
     openComposer(20, 100, saved.draft);
-    composer.querySelector('textarea').value = saved.text || '';
+    composer.querySelector('textarea').value = saved.text || ''; saveComposerDraft();
   }
   function composerViewport() {
     if (!integration) return;
@@ -417,7 +449,7 @@ patch('      if (performance.now() - composerShownAt < 120) return;', '      if 
 patch('    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…" });', `    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…", 'aria-label': 'Review description' });
     if (integration) { ta.value = draft.text || ''; listen(ta, 'input', saveComposerDraft); }
     if (integration) composer.appendChild(el('p', { class: 'an-context', text: 'Target: ' + (draft.componentLabel || componentLabel(draft.geom && resolveAnchorEl(draft.geom.selector))) + (draft.type === 'pen' ? '. A description is required. Original description only; no snapshot is available.' : '') }));`);
-patch('      cancel, save,', `      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: function () { saveComposerDraft(); composer.classList.remove('an-show'); setTool('cursor'); } }) : null,
+patch('      cancel, save,', `      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: closeComposerDraft }) : null,
       cancel, save,`);
 patch('    composer.classList.add("an-show");', `    composer.classList.add("an-show");
     if (integration) { closePanel(); composerViewport(); saveComposerDraft(); }`);
@@ -465,7 +497,7 @@ patch('text: current ? \'Current shared text: \'', 'text: current ? \'Current sh
 // Highlight fallback must still obey unique range resolution and private intersections.
 patch('        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;', '        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : (integration ? null : document.body);');
 
-patch('    return g && g.vw && Math.abs(g.vw - window.innerWidth) > 200;', '    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 1 || Math.abs(g.vh - window.innerHeight) > 1 : Math.abs(g.vw - window.innerWidth) > 200);');
+patch('    return g && g.vw && Math.abs(g.vw - window.innerWidth) > 200;', '    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 8 : Math.abs(g.vw - window.innerWidth) > 200);');
 patch('  function sizeOverlay() {', `  function sizeOverlay() {
     if (integration && overlay) { overlay.setAttribute('width', 0); overlay.setAttribute('height', 0); overlay.style.width = '0px'; overlay.style.height = '0px'; }`);
 // Persist the exact first-attempt PUT body. Later edits queue behind its receipt.
@@ -524,10 +556,17 @@ patch('          ? "Nothing resolved yet."', `          ? (integration ? 'No clo
 patch('    var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);', `    var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);
     if (integration) toolsRow.appendChild(el('p', { class: 'an-context', text: 'Closing a discussion does not verify a fix.' }));`);
 // Resume is a recovery action only when a real composer draft exists.
-patch('  function resumeDraft() {', `  function hasComposerDraft() {
+patch('  function resumeDraft() {', `  function readComposerDraft() {
     var saved; try { saved = JSON.parse(store.get('composer') || 'null'); } catch (e) {}
-    return !!(saved && saved.draft && saved.createdAt && Date.now() - saved.createdAt <= 7 * 86400000);
+    if (!saved || !saved.draft) return null;
+    if (!Number.isFinite(saved.createdAt) || Date.now() - saved.createdAt >= 7 * 86400000) {
+      try { window.localStorage.removeItem(integration.storageNamespace + ':composer'); } catch (e) {}
+      if (expiredDraftWork('composer', saved)) expiryNotice();
+      return null;
+    }
+    return saved;
   }
+  function hasComposerDraft() { return !!readComposerDraft(); }
   function updateResumeDraft() {
     var button = document.getElementById('__an_resume');
     if (button) button.hidden = !hasComposerDraft();
@@ -622,6 +661,12 @@ patch('  function poll() {', `  function applyPollAfter(response) {
 patch('sync.pollTimer = setTimeout(poll, CFG.pollInterval);', 'sync.pollTimer = setTimeout(poll, sync.pollAfter || CFG.pollInterval);');
 patch('if (status === 304) { sync.offline = false;', 'if (status === 304) { applyPollAfter(r.res); sync.offline = false;');
 patch('        sync.loaded = true;', '        applyPollAfter(r.res); sync.loaded = true;');
+
+// Escape is recovery in integrated composers; IME keystrokes belong to the browser.
+patch('    listen(ta, "keydown", function (e) {', '    listen(ta, "keydown", function (e) {\n      if (integration && e.isComposing) return;');
+patch('      if (e.key === "Escape") cancelDraft();', '      if (e.key === "Escape") { if (integration) closeComposerDraft(); else cancelDraft(); }');
+patch('    listen(document, "keydown", function (e) {', '    listen(document, "keydown", function (e) {\n      if (integration && e.isComposing) return;');
+patch('        setTool("cursor"); cancelDraft();', '        if (integration) closeComposerDraft(); else { setTool("cursor"); cancelDraft(); }');
 
 // A factory prevents a stale concurrent mount from destroying a newer controller.
 patch('export { init, destroy };', 'export { init, destroy, createController };');

@@ -8,9 +8,10 @@ const source = readFileSync('src/review/vendor/annotate.mjs', 'utf8');
 const instrumented = source.replace('// ANNOTATE TEST INJECTION POINT', `CFG.__test = {
   cssPath, resolveAnchorEl, quoteFromRange, privateRange, createComment, patchComment,
   normalizeComment, readQueue, writeQueue, store, handleResponse, dbRead, dbWrite,
-  flushAll, mergeServerPage, fromWire, state, sync, sendOp, remoteEnqueue, openComposer, commitDraft, hasComposerDraft, renderPanel, statusSelect, STATUSES, SYNC_TEXT, UNSAVED_MSG, applyPollAfter, poll
+  flushAll, mergeServerPage, fromWire, state, sync, sendOp, remoteEnqueue, openComposer, commitDraft, hasComposerDraft, renderPanel, statusSelect, STATUSES, SYNC_TEXT, UNSAVED_MSG, applyPollAfter, poll, resumeDraft, viewportMismatch, renderAll, expiredDraftWork
 };`).replace(/export \{[^}]+\};/, '').replace('export default Annotate;', 'return createController;');
 let controller: any, api: any;
+const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 const context = { componentLabel: 'Public component', description: 'Original words', viewport: { vw: 390, vh: 844 }, snapshotAttachmentId: null };
 beforeEach(() => {
   // Vitest 2 on Node 25 can inherit Node webstorage instead of DOM Storage.
@@ -27,7 +28,7 @@ beforeEach(() => {
   // exposes test functions on config, leaving the shipped module unchanged.
   api = (controller.config as any).__test;
 });
-afterEach(() => { controller?.destroy(); vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => { controller?.destroy(); vi.useRealTimers(); vi.restoreAllMocks(); Object.assign(window, { innerWidth: originalViewport.width, innerHeight: originalViewport.height }); });
 
 function record(type = 'pin') {
   return { schema: 2, id: 'cfixture', page: 'fixture:/', url: 'http://localhost/', type, author: 'Tester', authorId: 'actor', text: 'Current words', color: '#f59e0b',
@@ -213,6 +214,101 @@ describe('maintained renderer contract', () => {
     api.applyPollAfter(new Response(null, { status: 304, headers: { 'X-Review-Poll-After': '20000' } })); expect(api.sync.pollAfter).toBe(20000);
     api.applyPollAfter(new Response(null, { status: 304, headers: { 'X-Review-Poll-After': 'invalid' } })); expect(api.sync.pollAfter).toBe(5000);
     controller.destroy(); vi.useRealTimers();
+  });
+  it('ignores IME Escape and keeps a typed composer draft on ordinary Escape', () => {
+    api.openComposer(10, 10, { type: 'note', text: '' });
+    const ta = document.querySelector('#__an_compose textarea') as HTMLTextAreaElement;
+    ta.value = 'Draft words that Escape must keep'; ta.dispatchEvent(new Event('input'));
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true }));
+    expect(document.querySelector('#__an_compose.an-show')).not.toBeNull();
+    expect(JSON.parse(api.store.get('composer')).text).toBe(ta.value);
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, isComposing: true }));
+    expect(api.dbRead().comments).toEqual([]);
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(document.querySelector('#__an_compose.an-show')).toBeNull();
+    expect(api.hasComposerDraft()).toBe(true); expect((document.querySelector('#__an_resume') as HTMLButtonElement).hidden).toBe(false);
+    expect(JSON.parse(api.store.get('composer')).text).toBe('Draft words that Escape must keep');
+    api.resumeDraft();
+    expect((document.querySelector('#__an_compose textarea') as HTMLTextAreaElement).value).toBe('Draft words that Escape must keep');
+    expect(document.querySelector('#__an_compose.an-show')).not.toBeNull();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(api.hasComposerDraft()).toBe(true); // The later document shortcut must not discard it either.
+  });
+  it('keeps anchored drawings through height-only viewport changes and small width differences', () => {
+    Object.assign(window, { innerWidth: 390, innerHeight: 844 });
+    const target = document.querySelector('[data-review-id="button"]')!;
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 320, bottom: 180, width: 320, height: 180, toJSON() {} });
+    const c = { ...record(), type: 'shape', geom: { kind: 'rect', selector: '[data-review-id="button"]', x: .1, y: .1, w: .5, h: .5, vw: 390, vh: 844 } };
+    api.state.comments = [c]; api.renderAll();
+    expect(document.querySelectorAll('#__an_overlay .an-hit')).toHaveLength(1);
+    for (const height of [500, 900, 1024]) {
+      window.innerHeight = height; api.renderAll();
+      expect(api.viewportMismatch(c.geom)).toBe(false); expect(c.__anchorMissing).toBe(false);
+      expect(document.querySelectorAll('#__an_overlay .an-hit')).toHaveLength(1);
+    }
+    window.innerWidth = 398; api.renderAll(); expect(document.querySelectorAll('#__an_overlay .an-hit')).toHaveLength(1);
+    window.innerWidth = 399; api.renderAll(); expect(api.viewportMismatch(c.geom)).toBe(true);
+    expect(document.querySelectorAll('#__an_overlay .an-hit')).toHaveLength(0);
+    window.innerWidth = 844; api.renderAll(); api.renderPanel();
+    expect(c.__anchorMissing).toBe(true); expect(document.querySelector('#__an_list')!.textContent).toContain('Anchor unavailable.');
+    expect(c.originalContext).toEqual(context);
+  });
+  it('removes expired bookkeeping and empty sentinels without inventing a lost-draft notice', async () => {
+    const emptyValues: Array<[string, unknown]> = [
+      ['composer', null], ['composer', {}], ['composer', []], ['composer', { draft: { type: 'note' }, text: '' }],
+      ['tombstones', { cfixture: true }], ['reply-tombstones', { cfixture: { r: true } }],
+      ['an-color', '#ff0000'], ['annotate:read:october', { cfixture: 'stamp' }],
+      ['annotate:remote:october', { comments: [record()] }], ['thread-drafts', {}],
+      ['thread-drafts', { cfixture: { reply: { value: '  ' } } }], ['deleted-drafts', []], ['deleted-reply-drafts', []], ['annotate:queue:october', []],
+    ];
+    for (const [key, value] of emptyValues) {
+      expect(api.expiredDraftWork(key, JSON.stringify(value))).toBe(false);
+      const fullKey = 'actor-full-scope:' + key;
+      window.localStorage.setItem(fullKey, JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() - 1, value: JSON.stringify(value) }));
+      expect(api.store.get(key)).toBeNull(); expect(window.localStorage.getItem(fullKey)).toBeNull();
+    }
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelector('#__an_expiry')).toBeNull();
+    api.resumeDraft(); await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelector('#__an_expiry')).toBeNull();
+    controller.destroy(); controller.init({ project: 'fixture', page: '/', startOpen: true, integration: {
+      storageNamespace: 'actor-full-scope', initialSession: { actor: { id: 'actor', name: 'Tester', role: 'reviewer' } },
+    } });
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelector('#__an_expiry')).toBeNull();
+  });
+  it('notifies once for expired actual draft work, removes it, and never replays or repeats the notice after remount', async () => {
+    const work: Array<[string, unknown]> = [
+      ['composer', { draft: { type: 'note' }, text: 'Unposted words' }],
+      ['thread-drafts', { cfixture: { reply: { value: 'Reply draft' } } }],
+      ['deleted-drafts', [{ text: 'Refused thread words' }]], ['deleted-reply-drafts', [{ text: 'Refused reply words' }]],
+      ['annotate:queue:october', [{ t: 'put', id: 'cfixture', key: 'expired-operation', createdAt: Date.now() - 8 * 86400000 }]],
+    ];
+    for (const [key, value] of work) {
+      expect(api.expiredDraftWork(key, JSON.stringify(value))).toBe(true);
+      const fullKey = 'actor-full-scope:' + key;
+      window.localStorage.setItem(fullKey, JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() - 1, value: JSON.stringify(value) }));
+      expect(api.store.get(key)).toBeNull(); expect(window.localStorage.getItem(fullKey)).toBeNull();
+    }
+    expect(api.readQueue()).toEqual([]);
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelectorAll('#__an_expiry')).toHaveLength(1);
+    controller.destroy(); controller.init({ project: 'fixture', page: '/', startOpen: true, integration: {
+      storageNamespace: 'actor-full-scope', initialSession: { actor: { id: 'actor', name: 'Tester', role: 'reviewer' } },
+    } });
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelector('#__an_expiry')).toBeNull();
+  });
+  it('removes an expired composer by its original age even when a later edit refreshed the outer envelope', async () => {
+    const key = 'actor-full-scope:composer';
+    window.localStorage.setItem(key, JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() + 7 * 86400000,
+      value: JSON.stringify({ draft: { type: 'note' }, text: 'Old draft with a recently edited envelope', createdAt: Date.now() - 8 * 86400000 }) }));
+    expect(api.store.get('composer')).not.toBeNull(); // The envelope itself is still current.
+    api.resumeDraft();
+    expect(window.localStorage.getItem(key)).toBeNull(); expect(api.hasComposerDraft()).toBe(false);
+    expect(document.querySelector('#__an_compose.an-show')).toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(document.querySelectorAll('#__an_expiry')).toHaveLength(1);
+    controller.destroy(); controller.init({ project: 'fixture', page: '/', startOpen: true, integration: {
+      storageNamespace: 'actor-full-scope', initialSession: { actor: { id: 'actor', name: 'Tester', role: 'reviewer' } },
+    } });
+    api = controller.config.__test; api.resumeDraft();
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(api.hasComposerDraft()).toBe(false);
+    expect(document.querySelector('#__an_expiry')).toBeNull();
   });
   it('keeps tap selection active when native scrolling cancels a pointer', () => {
     controller.setTool('pin');

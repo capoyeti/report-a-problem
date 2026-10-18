@@ -14,7 +14,7 @@ Verified locally:
 | --- | --- |
 | `npm ci` | Exit 0. Lockfile unchanged. Existing audit reports 7 dependency vulnerabilities; no unrelated upgrades made. |
 | `npm run build` | Exit 0, pinned source verified, derivative regenerated in src and dist. |
-| `npm test` | Exit 0, 14 files and 197 tests passed. |
+| `npm test` | Exit 0, 14 files and 202 tests passed. |
 | `npx tsc --noEmit` | Exit 0. |
 | `git diff --check` | Exit 0. |
 | `gitleaks git --pre-commit --staged --redact --no-banner` | Exit 0, no leaks found. |
@@ -68,3 +68,16 @@ keys and their original conflict base, and retains deleted reply words for an
 explicit copy/discard decision. Poll timing is tested at 15 seconds followed by
 the normal five seconds, including malformed/minimum hints and a 304 response.
 Integrated storage warnings no longer promise the disabled JSON export.
+
+Final renderer edge batch: generated-renderer regressions now check that an IME
+Escape leaves the composer open, ordinary Escape closes and keeps the typed
+recovery copy, and Resume restores those words. Drawings remain anchored through
+height-only changes; an eight-CSS-pixel width tolerance permits small differences,
+while a materially different width still shows unavailable original context.
+Expired integrated entries are removed. Only actual composer/thread/queued work
+raises an expiry alert; cache, preferences, tombstones and null/empty sentinels do
+not. A fresh outer envelope cannot extend an originally expired composer: its
+entry is removed, and a remount does not repeat the notice. The phone fixture
+covers Escape/Resume and a 390-wide drawing at heights 844 and 700, with the latter
+in phone-drawing-height-change.png. These remain synthetic browser checks, with
+physical keyboard/browser-bar acceptance pending.

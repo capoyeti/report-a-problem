@@ -244,6 +244,14 @@ async function main() {
     await mobile.getByRole('button', { name: 'Parent element', exact: true }).click();
     await mobile.getByRole('button', { name: 'Use this target', exact: true }).click();
     await mobile.locator('#__an_compose textarea').fill('Phone draft survives keyboard resize and rotation.');
+    await mobile.locator('#__an_compose textarea').evaluate(ta => ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true })));
+    assert.equal(await mobile.locator('#__an_compose.an-show').count(), 1);
+    await mobile.keyboard.press('Escape');
+    assert.equal(await mobile.locator('#__an_compose.an-show').count(), 0);
+    await mobile.evaluate(() => (window as any).reviewFixture.open());
+    await mobile.getByRole('button', { name: 'Resume draft', exact: true }).click();
+    assert.equal(await mobile.locator('#__an_compose textarea').inputValue(), 'Phone draft survives keyboard resize and rotation.');
+    checks.push('composing Escape is ignored; ordinary Escape closes and preserves phone composer for Resume');
     await mobile.waitForTimeout(250); await mobile.screenshot({ path: path.join(output, 'composer-390x844.png') }); await noOverflow(mobile);
     await mobile.setViewportSize({ width: 390, height: 420 });
     for (const name of ['Comment', 'Cancel', 'Close and keep draft']) {
@@ -286,6 +294,15 @@ async function main() {
     await post(mobile, 'Original diagram description from the phone.');
     const pen = [...comments.values()].find(c => c.type === 'pen'); assert(pen && pen.originalContext.componentLabel === 'Public diagram');
     await mobile.getByText('Original description only. No snapshot was saved.', { exact: true }).waitFor();
+    await mobile.getByRole('button', { name: 'Close comments panel', exact: true }).click();
+    await mobile.locator('#drawing').scrollIntoViewIfNeeded();
+    await mobile.setViewportSize({ width: 390, height: 700 }); await mobile.waitForTimeout(250);
+    assert.equal(await mobile.locator('#__an_overlay path.an-hit').count(), 1);
+    await mobile.screenshot({ path: path.join(output, 'phone-drawing-height-change.png') });
+    await mobile.setViewportSize({ width: 390, height: 844 }); await mobile.waitForTimeout(250);
+    assert.equal(await mobile.locator('#__an_overlay path.an-hit').count(), 1);
+    await mobile.evaluate(() => (window as any).reviewFixture.open());
+    checks.push('same-width phone drawing survives height-only viewport changes; cross-layout fallback remains tested separately');
     await desktop.bringToFront(); await desktop.evaluate(() => (window as any).reviewFixture.refresh());
     await desktop.getByText(pen.text, { exact: true }).waitFor();
     const penCard = desktop.locator(`.an-card[data-id="${pen.id}"]`);

@@ -108,11 +108,31 @@ const createController = function (host) {
   // localStorage can be denied (private mode, sandboxed iframes) or fill up —
   // never crash, and never pretend a failed write persisted. dbWrite reports
   // success so callers can keep unsaved work in memory and surface the issue.
+  function expiredDraftWork(key, raw) {
+    var value; try { value = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return false; }
+    function words(text) { return typeof text === 'string' && !!text.trim(); }
+    if (key === 'composer') return !!(value && value.draft && (words(value.text) || words(value.draft.text) || value.draft.geom || value.draft.anchor));
+    if (key === 'thread-drafts') return !!(value && typeof value === 'object' && Object.keys(value).some(function (id) {
+      var draft = value[id]; return draft && (draft.reply && words(draft.reply.value) || draft.edit && words(draft.edit.value));
+    }));
+    if (key === 'deleted-drafts' || key === 'deleted-reply-drafts') return Array.isArray(value) && value.some(function (draft) {
+      return draft && (words(draft.text) || Array.isArray(draft.replies) && draft.replies.some(function (reply) { return reply && words(reply.text); }));
+    });
+    if (key.indexOf('annotate:queue:') === 0) return Array.isArray(value) && value.some(function (op) {
+      return op && ['put', 'del', 'reply', 'unreply'].indexOf(op.t) >= 0 && typeof op.id === 'string' && typeof op.key === 'string';
+    });
+    return false;
+  }
   var store = {
-    get: function (k) { try { var raw = window.localStorage.getItem(integration ? integration.storageNamespace + ':' + k : k);
+    get: function (k) { try { var fullKey = integration ? integration.storageNamespace + ':' + k : k;
+      var raw = window.localStorage.getItem(fullKey);
       if (!integration || raw === null) return raw;
       var saved; try { saved = JSON.parse(raw); } catch (e) {}
-      if (!saved || saved.reviewDraft !== 1 || Date.now() > saved.expiresAt) { expiryNotice(); return null; }
+      if (!saved || saved.reviewDraft !== 1 || !Number.isFinite(saved.expiresAt) || Date.now() >= saved.expiresAt) {
+        try { window.localStorage.removeItem(fullKey); } catch (e) {}
+        if (expiredDraftWork(k, saved && saved.reviewDraft === 1 ? saved.value : raw)) expiryNotice();
+        return null;
+      }
       return saved.value; } catch (e) { return null; } },
     // Returns whether the write actually reached storage. Callers must not
     // assume persistence on failure — that is what surfaces the unsaved banner.
@@ -549,7 +569,7 @@ const createController = function (host) {
     var q;
     try { q = JSON.parse(store.get(QUEUE_KEY) || "[]"); } catch (e) { q = []; }
     return (Array.isArray(q) ? q : []).filter(function (o) {
-      if (integration && o && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
+      if (integration && o && OP_TYPES[o.t] === 1 && typeof o.id === 'string' && typeof o.key === 'string' && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
       return o && OP_TYPES[o.t] === 1 && typeof o.id === "string" && typeof o.key === "string";
     });
   }
@@ -2314,7 +2334,7 @@ const createController = function (host) {
   }
 
   function viewportMismatch(g) {
-    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 1 || Math.abs(g.vh - window.innerHeight) > 1 : Math.abs(g.vw - window.innerWidth) > 200);
+    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 8 : Math.abs(g.vw - window.innerWidth) > 200);
   }
   function renderGeom(c, missingSlot) {
     // A shape only makes sense relative to its anchor element. If that
@@ -2431,6 +2451,12 @@ const createController = function (host) {
   // COMPOSER (new comment popover)
   // ==========================================================================
   var composer, pendingDraft = null, composerShownAt = 0;
+  function closeComposerDraft() {
+    saveComposerDraft();
+    if (composer) composer.classList.remove('an-show');
+    setTool('cursor');
+    if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true });
+  }
   function saveComposerDraft() {
     if (!integration || !pendingDraft || !composer) return;
     var ta = composer.querySelector('textarea');
@@ -2438,21 +2464,26 @@ const createController = function (host) {
     pendingDraft.__draftStarted = saved.createdAt;
     store.set('composer', JSON.stringify(saved)); updateResumeDraft();
   }
-  function hasComposerDraft() {
+  function readComposerDraft() {
     var saved; try { saved = JSON.parse(store.get('composer') || 'null'); } catch (e) {}
-    return !!(saved && saved.draft && saved.createdAt && Date.now() - saved.createdAt <= 7 * 86400000);
+    if (!saved || !saved.draft) return null;
+    if (!Number.isFinite(saved.createdAt) || Date.now() - saved.createdAt >= 7 * 86400000) {
+      try { window.localStorage.removeItem(integration.storageNamespace + ':composer'); } catch (e) {}
+      if (expiredDraftWork('composer', saved)) expiryNotice();
+      return null;
+    }
+    return saved;
   }
+  function hasComposerDraft() { return !!readComposerDraft(); }
   function updateResumeDraft() {
     var button = document.getElementById('__an_resume');
     if (button) button.hidden = !hasComposerDraft();
   }
   function resumeDraft() {
-    var raw = store.get('composer'); if (!raw) return;
-    var saved; try { saved = JSON.parse(raw); } catch (e) { return; }
-    if (!saved || !saved.draft || !saved.createdAt || Date.now() - saved.createdAt > 7 * 86400000) { expiryNotice(); return; }
+    var saved = readComposerDraft(); if (!saved) return;
     saved.draft.__draftStarted = saved.createdAt;
     openComposer(20, 100, saved.draft);
-    composer.querySelector('textarea').value = saved.text || '';
+    composer.querySelector('textarea').value = saved.text || ''; saveComposerDraft();
   }
   function composerViewport() {
     if (!integration) return;
@@ -2511,7 +2542,7 @@ const createController = function (host) {
     var isMac = /Mac|iPhone|iPad/i.test(plat);
     composer.appendChild(el("div", { class: "an-cfoot" }, [
       el("span", { class: "an-ckbd", text: (isMac ? "⌘" : "Ctrl") + "↵ to post" }),
-      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: function () { saveComposerDraft(); composer.classList.remove('an-show'); setTool('cursor'); } }) : null,
+      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: closeComposerDraft }) : null,
       cancel, save,
     ]));
     listen(save, "click", function () {
@@ -2534,8 +2565,9 @@ const createController = function (host) {
     });
     listen(cancel, "click", cancelDraft);
     listen(ta, "keydown", function (e) {
+      if (integration && e.isComposing) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save.click();
-      if (e.key === "Escape") cancelDraft();
+      if (e.key === "Escape") { if (integration) closeComposerDraft(); else cancelDraft(); }
       e.stopPropagation();
     });
 
@@ -2706,7 +2738,13 @@ const createController = function (host) {
   }, true);
   listen(document, 'keydown', function (e) {
     if (!integration || !state.enabled) return;
-    if (e.key === 'Escape') { cancelDrawing(); clearTarget(); if (pendingDraft) cancelDraft(); setTool('cursor'); return; }
+    if (e.isComposing) return;
+    if (e.key === 'Escape') {
+      cancelDrawing(); clearTarget();
+      if (pendingDraft) { e.preventDefault(); e.stopPropagation(); closeComposerDraft(); }
+      else setTool('cursor');
+      return;
+    }
     if (state.tool === 'pin' && !isOurs(e.target) && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault(); e.stopImmediatePropagation(); chooseTarget(e.target);
     }
@@ -2946,6 +2984,7 @@ const createController = function (host) {
     root.appendChild(panel);
 
     listen(document, "keydown", function (e) {
+      if (integration && e.isComposing) return;
       if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.nodeName)) return;
       if (e.target && e.target.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2957,7 +2996,7 @@ const createController = function (host) {
       else if (e.key === "?") helpEl.classList.toggle("an-show");
       else if (e.key === "Escape") {
         if (helpEl.classList.contains("an-show")) { helpEl.classList.remove("an-show"); return; }
-        setTool("cursor"); cancelDraft();
+        if (integration) closeComposerDraft(); else { setTool("cursor"); cancelDraft(); }
       }
     });
 
