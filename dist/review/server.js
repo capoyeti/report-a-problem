@@ -143,7 +143,7 @@ export function createReviewGatewayHandlers(cfg) {
                 const headers = trustedHeaders(current);
                 headers.set('content-type', 'application/json');
                 const response = await call('/api/v1/reviews/session', { method: 'POST', headers,
-                    body: JSON.stringify({ actorId: current.user.id, actorName: current.user.name || 'School reviewer',
+                    body: JSON.stringify({ actorId: current.user.id, actorName: current.user.name || 'Reviewer',
                         tenantId: scope.tenantId, environment: scope.environment, campaignId: scope.campaignId,
                         pagePath: scope.pagePath, resourceId: scope.resourceId, buildId: cfg.buildId }) });
                 return forwardResponse(response);

@@ -17,7 +17,7 @@ function setup(role = 'lead', override: Record<string, unknown> = {}) {
   const details = card.querySelector('details')!; details.open = true; details.dispatchEvent(new Event('toggle'));
   return { card, request, snapshot, panels };
 }
-async function loaded() { await vi.waitFor(() => expect(document.body.textContent).toContain('Reload shared details')); }
+async function loaded() { await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).not.toMatch(/Loading|Open to/)); }
 function click(text: string) { const b = [...document.querySelectorAll('button')].find(b => b.textContent === text); expect(b).toBeDefined(); b!.click(); }
 
 describe('finding decisions and retest UI', () => {
@@ -65,5 +65,29 @@ describe('finding decisions and retest UI', () => {
   it('teardown ignores late shared responses', async () => {
     const { panels } = setup(); panels.teardown(); await new Promise(r => setTimeout(r, 10));
     expect(document.body.textContent).not.toContain('Save finding details');
+  });
+});
+
+describe('durable unconfirmed finding writes', () => {
+  it('keeps the operation key after a gateway 503', async () => {
+    const { request } = setup('lead', { details: { category: 'bug', expected: 'x', actual: 'y', impact: 'z' } }); await loaded();
+    request.mockResolvedValueOnce(new Response('{"error":"unavailable"}', { status: 503 }));
+    click('Send finding to Plane'); await vi.waitFor(() => expect(document.body.textContent).toContain('Retry unconfirmed change'));
+    const first = request.mock.calls.find(([, init]) => init?.method === 'POST')![1]!;
+    click('Retry unconfirmed change'); await vi.waitFor(() => expect(request.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2));
+    const retry = request.mock.calls.filter(([, init]) => init?.method === 'POST')[1][1]!;
+    expect(retry.body).toBe(first.body); expect(new Headers(retry.headers).get('idempotency-key')).toBe(new Headers(first.headers).get('idempotency-key'));
+  });
+  it('restores the exact pending command after the page adapter is recreated', async () => {
+    const first = setup('lead', { details: { category: 'bug', expected: 'x', actual: 'y', impact: 'z' } }); await loaded();
+    first.request.mockRejectedValueOnce(new Error('acknowledgement lost'));
+    click('Send finding to Plane'); await vi.waitFor(() => expect(document.body.textContent).toContain('Retry unconfirmed change'));
+    const original = first.request.mock.calls.find(([, init]) => init?.method === 'POST')![1]!;
+    first.panels.teardown(); document.body.replaceChildren();
+    const next = setup('lead', { version: 8 }); await loaded();
+    expect(document.body.textContent).toContain('Retry unconfirmed change'); click('Retry unconfirmed change');
+    await vi.waitFor(() => expect(next.request.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    const restored = next.request.mock.calls.find(([, init]) => init?.method === 'POST')![1]!;
+    expect(restored.body).toBe(original.body); expect(new Headers(restored.headers).get('idempotency-key')).toBe(new Headers(original.headers).get('idempotency-key'));
   });
 });

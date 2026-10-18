@@ -47,6 +47,24 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
   const prefix = getReviewDraftKey(cfg.actorId, cfg.scope) + ':finding:';
   const drafts = new Map<string, Record<string, string>>();
   const pending = new Map<string, { body: string; key: string; path: string }>();
+  const expanded = new Set<string>();
+  function restorePending(id: string) {
+    if (pending.has(id)) return;
+    try {
+      const raw = cfg.host.localStorage.getItem(prefix + id + ':operation'); if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!Number.isFinite(saved.at) || saved.at < Date.now() - sevenDays) return;
+      const op = saved.op;
+      if (op && ['finding', 'promotion', 'retest'].includes(op.path) && typeof op.body === 'string' && op.body.length < 100_000 && typeof op.key === 'string' && /^[a-f0-9-]{36}$/i.test(op.key)) pending.set(id, op);
+    } catch { /* Invalid local operations cannot become shared commands. */ }
+  }
+  function keepPending(id: string, op: { body: string; key: string; path: string }) {
+    pending.set(id, op);
+    try { cfg.host.localStorage.setItem(prefix + id + ':operation', JSON.stringify({ at: Date.now(), op })); } catch { /* The active page retains the exact operation. */ }
+  }
+  function finishPending(id: string) {
+    pending.delete(id); try { cfg.host.localStorage.removeItem(prefix + id + ':operation'); } catch { /* A replay remains idempotent. */ }
+  }
   let stopped = false;
   const cleanups = new Set<() => void>();
   function saveDraft(id: string, fields: Record<string, string>) {
@@ -74,13 +92,14 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
   function decorateThread(comment: Record<string, unknown>, card: HTMLElement) {
     const id = String(comment.id);
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || stopped) return;
+    restorePending(id);
     let disposed = false, snapshot: Snapshot | null = null, session: ReviewSession | null = null, busy = false;
     const root = node('details'); root.className = 'an-finding';
     root.addEventListener('click', e => e.stopPropagation());
     root.addEventListener('keydown', e => e.stopPropagation());
     const summary = node('summary', 'Finding and progress'); root.append(summary);
     const status = node('p', 'Open to load shared finding details.'); status.setAttribute('role', 'status'); root.append(status);
-    const content = node('div'); root.append(content); card.append(root);
+    const content = node('div'); root.append(button('Reload shared details', () => { void load(); }), content); card.append(root);
     function alive() { return !disposed && !stopped; }
     function errorText(response: Response, data: any) {
       if (response.status === 409) return 'This finding changed, or the test build no longer matches. Your form is kept. Reload shared details, compare, then save again.';
@@ -106,7 +125,7 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       if (busy || !snapshot || !alive()) return;
       let op = pending.get(id);
       // A lost acknowledgement must retry the exact operation before a new one.
-      if (!op) { op = { key: cfg.host.crypto.randomUUID(), body: JSON.stringify({ expectedVersion: snapshot.finding.version, ...payload }), path }; pending.set(id, op); }
+      if (!op) { op = { key: cfg.host.crypto.randomUUID(), body: JSON.stringify({ expectedVersion: snapshot.finding.version, ...payload }), path }; keepPending(id, op); }
       busy = true; status.textContent = 'Sharing this change...';
       content.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
       try {
@@ -115,9 +134,13 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
         });
         const result = await response.json().catch(() => ({}));
         if (!alive()) return;
-        pending.delete(id);
+        if (response.status >= 500 || response.status === 429) {
+          render(); status.textContent = response.status === 429 ? 'Too many changes at once. Wait a minute, then retry this change.' : 'Could not confirm delivery. Retry the same change to check it safely.'; return;
+        }
+        if (response.ok && (op.path === 'promotion' ? typeof result.reportId !== 'string' || typeof result.deliveryId !== 'string' : !Number.isInteger(result.finding?.version))) throw new Error('Unconfirmed mutation response');
+        finishPending(id);
         if (!response.ok) { status.textContent = errorText(response, result); return; }
-        if (path === 'finding' && payload.command === 'describe') clearDraft(id); status.textContent = path === 'promotion' ? 'Finding reserved for Plane. Delivery progress appears below.' : 'Change shared with the team.';
+        if (op.path === 'finding' && JSON.parse(op.body).command === 'describe') clearDraft(id); status.textContent = path === 'promotion' ? 'Finding reserved for Plane. Delivery progress appears below.' : 'Change shared with the team.';
         busy = false; await load();
       } catch {
         if (alive()) { render(); status.textContent = 'Could not confirm delivery. Your form is kept. Retry the same change to check it safely.'; }
@@ -150,12 +173,11 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       if (snapshot.delivery) {
         const delivery = snapshot.delivery;
         content.append(node('p', labels[delivery.state] ?? 'Plane delivery in progress'));
-        if (delivery.reason) content.append(node('p', delivery.reason));
+        if (delivery.reason) content.append(node('p', 'The review lead needs to check delivery before retrying.'));
         if (delivery.issueUrl && /^https:\/\/app\.plane\.so\//.test(delivery.issueUrl)) {
           const a = node('a', 'Open Plane ticket'); a.href = delivery.issueUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'; content.append(a);
         }
       }
-      content.append(button('Reload shared details', () => { void load(); }));
       if (pending.has(id)) {
         content.append(button('Retry unconfirmed change', () => { const op = pending.get(id)!; void mutate(op.path, {}); }));
         content.append(node('p', 'Resolve this unconfirmed change before making another change.'));
@@ -256,8 +278,9 @@ export function createFindingPanels(cfg: FindingPanelConfig) {
       for (const retest of snapshot.retests) content.append(node('p', `${retest.result === 'pass' ? 'Passed' : 'Failed'} on ${retest.build_id}: ${retest.observations}`));
       const style = node('style'); style.textContent = '.an-finding{border-top:1px solid #bbb;padding:12px 0;margin-top:12px}.an-finding summary{cursor:pointer;min-height:44px;display:list-item}.an-finding label{display:block;margin:12px 0}.an-finding input,.an-finding textarea,.an-finding select{display:block;box-sizing:border-box;width:100%;font:inherit;font-size:16px;padding:8px;margin-top:4px;color:#17171f;background:#fff;border:1px solid #777;border-radius:4px}.an-finding button,.an-finding a{display:inline-flex;align-items:center;min-height:44px;font:inherit;font-size:14px;padding:8px;box-sizing:border-box;margin:4px 4px 4px 0;white-space:normal}.an-finding p{overflow-wrap:anywhere}.an-finding h4{margin:12px 0 4px}.an-finding textarea{min-height:80px}'; content.append(style);
     }
-    root.addEventListener('toggle', () => { if (root.open && !snapshot) void load(); });
+    root.addEventListener('toggle', () => { if (root.open) expanded.add(id); else expanded.delete(id); if (root.open && !snapshot) void load(); });
+    if (expanded.has(id)) { root.open = true; void load(); }
     const cleanup = () => { disposed = true; cleanups.delete(cleanup); }; cleanups.add(cleanup); return cleanup;
   }
-  return { decorateThread, teardown() { stopped = true; cleanups.forEach(fn => fn()); cleanups.clear(); drafts.clear(); pending.clear(); } };
+  return { decorateThread, teardown() { stopped = true; cleanups.forEach(fn => fn()); cleanups.clear(); drafts.clear(); pending.clear(); expanded.clear(); } };
 }
