@@ -40,3 +40,61 @@ https://github.com/reviewjs/annotate/blob/1748d22081c01e0d2d92d1724a1915e8b48fd4
 Full backend conformance, production host identity checks and physical-device
 acceptance remain separate gates. Never describe a fixture-only browser run as
 Rhona's acceptance of the consuming app.
+
+Renderer patch ledger for SPR-04 / SPR-05:
+
+- Component paths prefer unique `data-review-id`. Selector resolution requires
+  exactly one public target. Private/excluded ancestry, forms, inputs and
+  contenteditable regions are excluded; text ranges crossing them are rejected
+  both when selected and when resolved. Target labels never harvest parent text.
+- Every new mark preserves an immutable `originalContext` containing the initial
+  component label, description, viewport and null snapshot attachment. The host
+  service sidecar owns the original build. URLs omit queries and fragments.
+  Missing, hidden, ambiguous and incompatible drawing layouts show their original
+  context in the thread list without a guessed overlay. Freehand explicitly says
+  Original description only when no private snapshot was saved.
+- Pin mode selects on pointerup, offers parent/child adjustment and confirmation,
+  blocks underlying control activation, and preserves native swipe scrolling.
+  Browse mode leaves native text selection alone. Highlight is an explicit mode
+  with a native selection fallback. Drawing is explicit and Escape/pointercancel
+  removes temporary strokes. Native scroll pointercancel preserves pin mode.
+- Phone and tablet composers use the visual viewport and safe area, 16px fields,
+  44px controls, readable colours, keyboard focus, close/keep/resume controls and
+  persisted actor/scope drafts. Seven-day expiry holds both storage values and
+  individual queue operations, including legacy queues without expiry. Expired
+  work raises a notice and never silently replays. No session token is persisted.
+- Blank or over-limit descriptions/replies are rejected without clearing the
+  field. Pen marks require a description. Geometry is bounded at 2,000 points.
+- Rejected/conflicting operations remain durably held across refresh, submit,
+  subsequent edits and reload. Compare loads current shared words before offering
+  explicit discard or retry. A retry is a new decision with a new operation key.
+  Tombstones remove the shared mark and preserve refused local words separately
+  until discard or expiry. Unsupported reply editing is explicitly rejected.
+- The first attempted PUT persists its exact serialized payload. Network or auth
+  retries reuse those bytes and key. Later local edits queue behind it with a new
+  key. Polling cannot advance a pending operation's conflict base.
+
+Supported integration extension points:
+
+```js
+integration.decorateThread = (comment, card) => {
+  // Runs after the native reply/edit/actions content. Append sidecar content.
+  const extra = document.createElement('section');
+  card.appendChild(extra);
+  return () => extra.remove(); // optional, called before rerender and on destroy
+};
+integration.teardown = () => { /* optional final host cleanup */ };
+```
+
+The callback receives a serialized copy of the renderer record. Keep service-owned
+metadata in the host sidecar. Appending content must preserve the native reply UI.
+A callback cleanup must release any listeners or other external resources it owns.
+VisualViewport listeners and target observers belong to the renderer lifecycle.
+
+Renderer-specific proof is in `test/review-renderer.test.ts` and
+`scripts/review-renderer-verify.ts`. The latter owns a disposable loopback fixture,
+blocks all non-fixture browser requests, and loads no environment file. Run it
+headed with `npx tsx scripts/review-renderer-verify.ts`. The earlier spike harness
+is coordinator-owned and requires the new Use this target confirmation step when
+integrated. No normal-report source, host adapter, transport or gateway is changed
+by this renderer slice.
