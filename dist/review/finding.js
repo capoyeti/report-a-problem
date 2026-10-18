@@ -185,7 +185,13 @@ export function createFindingPanels(cfg) {
                     status.textContent = errorText(response, result);
                     return;
                 }
-                if (op.path === 'finding' && JSON.parse(op.body).command === 'describe')
+                const accepted = JSON.parse(op.body);
+                const clearKeys = op.path === 'retest' ? ['observations'] : { describe: ['category', 'expected', 'actual', 'impact', 'steps', 'case', 'source', 'sourcePage'], assign: ['owner', 'tester'], needs_decision: ['reason'], decline: ['reason'], pr_open: ['pr'], ready_for_retest: ['target'] }[accepted.command] ?? [];
+                const remaining = { ...(loadDraft(id) ?? {}) };
+                clearKeys.forEach(key => { delete remaining[key]; });
+                if (Object.keys(remaining).length)
+                    saveDraft(id, remaining);
+                else
                     clearDraft(id);
                 status.textContent = path === 'promotion' ? 'Finding reserved for Plane. Delivery progress appears below.' : 'Change shared with the team.';
                 busy = false;
@@ -221,6 +227,7 @@ export function createFindingPanels(cfg) {
                 return;
             const f = snapshot.finding, lead = session.actor.role === 'lead';
             const writable = session.actor.role !== 'viewer';
+            const fields = { ...(loadDraft(id) ?? {}) };
             const creator = comment.authorId === cfg.actorId;
             const owner = f.owner_id === cfg.actorId;
             content.replaceChildren();
@@ -229,10 +236,36 @@ export function createFindingPanels(cfg) {
                 content.append(node('p', f.reason));
             const threadLink = cfg.returnPath && /^\/[A-Za-z0-9/_-]+$/.test(cfg.returnPath) && /^[a-f0-9-]{36}$/i.test(f.thread_id)
                 ? `${cfg.host.location.origin}${cfg.returnPath}?thread=${encodeURIComponent(f.thread_id)}` : null;
-            if (threadLink)
-                content.append(button('Copy link to this thread', () => {
-                    cfg.host.navigator.clipboard?.writeText(threadLink).then(() => { status.textContent = 'Thread link copied. Access is checked when it is opened.'; }, () => { status.textContent = 'Could not copy the link. Try again.'; });
-                }));
+            if (threadLink) {
+                const link = node('a', 'Open this thread link');
+                link.href = threadLink;
+                content.append(link);
+                const fallback = node('input');
+                fallback.value = threadLink;
+                fallback.readOnly = true;
+                fallback.hidden = true;
+                fallback.setAttribute('aria-label', 'Thread link to copy');
+                const copy = button('Copy link to this thread', () => {
+                    status.textContent = 'Copying the thread link...';
+                    copy.disabled = true;
+                    let timer;
+                    const clipboard = cfg.host.navigator.clipboard;
+                    const write = Promise.resolve().then(() => { if (!clipboard?.writeText)
+                        throw new Error('Clipboard unavailable'); return clipboard.writeText(threadLink); });
+                    Promise.race([write, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Clipboard permission required')), 2000); })])
+                        .then(() => { if (alive())
+                        status.textContent = 'Thread link copied. Access is checked when it is opened.'; }, () => {
+                        if (alive()) {
+                            fallback.hidden = false;
+                            fallback.focus();
+                            fallback.select();
+                            status.textContent = 'Select and copy the thread link below, or choose Open this thread link.';
+                        }
+                    }).finally(() => { clearTimeout(timer); if (alive())
+                        copy.disabled = false; });
+                });
+                content.append(copy, fallback);
+            }
             if (snapshot.delivery) {
                 const delivery = snapshot.delivery;
                 content.append(node('p', labels[delivery.state] ?? 'Plane delivery in progress'));
@@ -246,6 +279,8 @@ export function createFindingPanels(cfg) {
                     content.append(a);
                 }
             }
+            if (Object.keys(fields).length)
+                content.append(button('Discard saved form draft', () => { clearDraft(id); render(); }));
             if (pending.has(id)) {
                 content.append(button('Retry unconfirmed change', () => { const op = pending.get(id); void mutate(op.path, {}); }));
                 content.append(node('p', 'Resolve this unconfirmed change before making another change.'));
@@ -254,7 +289,6 @@ export function createFindingPanels(cfg) {
             if (writable && (lead || creator) && !snapshot.delivery) {
                 const form = node('form');
                 form.setAttribute('aria-label', 'Finding details');
-                const fields = { ...(loadDraft(id) ?? {}) };
                 const details = f.details;
                 const label = node('label', 'What kind of feedback is this?');
                 const category = node('select');
@@ -338,7 +372,9 @@ export function createFindingPanels(cfg) {
                         assignment.append(label);
                         return select;
                     }
-                    const assigned = choose('Who will follow up?', f.owner_id), tester = choose('Who will retest?', f.tester_id);
+                    const assigned = choose('Who will follow up?', fields.owner ?? f.owner_id), tester = choose('Who will retest?', fields.tester ?? f.tester_id);
+                    assigned.addEventListener('change', () => { fields.owner = assigned.value; saveDraft(id, fields); });
+                    tester.addEventListener('change', () => { fields.tester = tester.value; saveDraft(id, fields); });
                     const submit = node('button', 'Save assignment');
                     submit.type = 'submit';
                     assignment.append(submit);
@@ -352,6 +388,8 @@ export function createFindingPanels(cfg) {
                 reason.setAttribute('aria-label', 'Decision reason');
                 reason.required = true;
                 reason.maxLength = 5000;
+                reason.value = fields.reason ?? '';
+                reason.addEventListener('input', () => { fields.reason = reason.value; saveDraft(id, fields); });
                 decision.append(reason);
                 for (const [command, text] of [['needs_decision', 'Needs a decision'], ['decline', 'Decline finding']])
                     decision.append(button(text, () => {
@@ -372,6 +410,8 @@ export function createFindingPanels(cfg) {
                     input.placeholder = 'GitHub pull request link';
                     input.setAttribute('aria-label', 'GitHub pull request link');
                     input.required = true;
+                    input.value = fields.pr ?? '';
+                    input.addEventListener('input', () => { fields.pr = input.value; saveDraft(id, fields); });
                     form.append(input);
                     const submit = node('button', 'Record proposed fix');
                     submit.type = 'submit';
@@ -400,6 +440,8 @@ export function createFindingPanels(cfg) {
                         option.value = t.id;
                         select.append(option);
                     }
+                    select.value = fields.target ?? targets[0].id;
+                    select.addEventListener('change', () => { fields.target = select.value; saveDraft(id, fields); });
                     label.append(select);
                     form.append(label);
                     const submit = node('button', 'Ready for retest');
@@ -416,9 +458,9 @@ export function createFindingPanels(cfg) {
                 const target = snapshot.testTarget;
                 if (f.fix_build !== cfg.buildId || !target?.reachable || target.buildId !== cfg.buildId || target.origin !== cfg.host.location.origin) {
                     content.append(node('p', 'This is not the confirmed test build. Open the assigned test target and reload before recording a result.'));
-                    if (target?.reachable && /^https:\/\//.test(target.origin)) {
+                    if (target?.reachable && /^https:\/\//.test(target.origin) && cfg.returnPath && /^\/[A-Za-z0-9/_-]+$/.test(cfg.returnPath) && /^[a-f0-9-]{36}$/i.test(f.thread_id)) {
                         const a = node('a', 'Open assigned test target');
-                        a.href = target.origin + cfg.scope.pagePath;
+                        a.href = target.origin + cfg.returnPath + '?thread=' + encodeURIComponent(f.thread_id);
                         a.rel = 'noopener noreferrer';
                         content.append(a);
                     }
@@ -431,6 +473,8 @@ export function createFindingPanels(cfg) {
                     observations.maxLength = 5000;
                     observations.setAttribute('aria-label', 'What did you observe during the retest?');
                     observations.placeholder = 'What did you observe during the retest?';
+                    observations.value = fields.observations ?? '';
+                    observations.addEventListener('input', () => { fields.observations = observations.value; saveDraft(id, fields); });
                     form.append(observations);
                     content.append(node('p', 'Retesting the confirmed build: ' + cfg.buildId));
                     for (const [result, text] of [['pass', 'Retest passed'], ['fail', 'Retest failed']])
@@ -447,7 +491,7 @@ export function createFindingPanels(cfg) {
             for (const retest of snapshot.retests)
                 content.append(node('p', `${retest.result === 'pass' ? 'Passed' : 'Failed'} on ${retest.build_id}: ${retest.observations}`));
             const style = node('style');
-            style.textContent = '.an-finding{border-top:1px solid #bbb;padding:12px 0;margin-top:12px}.an-finding summary{cursor:pointer;min-height:44px;display:list-item}.an-finding label{display:block;margin:12px 0}.an-finding input,.an-finding textarea,.an-finding select{display:block;box-sizing:border-box;width:100%;font:inherit;font-size:16px;padding:8px;margin-top:4px;color:#17171f;background:#fff;border:1px solid #777;border-radius:4px}.an-finding button,.an-finding a{display:inline-flex;align-items:center;min-height:44px;font:inherit;font-size:14px;padding:8px;box-sizing:border-box;margin:4px 4px 4px 0;white-space:normal}.an-finding p{overflow-wrap:anywhere}.an-finding h4{margin:12px 0 4px}.an-finding textarea{min-height:80px}';
+            style.textContent = '.an-finding{border-top:1px solid #bbb;padding:12px 0;margin-top:12px}.an-finding summary{cursor:pointer;min-height:44px;display:list-item}.an-finding label{display:block;margin:12px 0}.an-finding input,.an-finding textarea,.an-finding select{display:block;box-sizing:border-box;width:100%;font:inherit;font-size:16px;padding:8px;margin-top:4px;color:#17171f;background:#fff;border:1px solid #777;border-radius:4px}.an-finding button,.an-finding a{display:inline-flex;align-items:center;min-height:44px;font:inherit;font-size:14px;padding:8px;box-sizing:border-box;margin:4px 4px 4px 0;white-space:normal}.an-finding [hidden]{display:none!important}.an-finding button{background:#f4f6f9;color:#19314a;border:1px solid #7c8a99;border-radius:6px}.an-finding button[type=submit]{background:#174f8a;color:#fff;border-color:#174f8a}.an-finding p{overflow-wrap:anywhere}.an-finding h4{margin:12px 0 4px}.an-finding textarea{min-height:80px}';
             content.append(style);
         }
         root.addEventListener('toggle', () => { if (root.open)

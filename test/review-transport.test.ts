@@ -184,3 +184,43 @@ describe('deployment changes after bootstrap', () => {
     await expect(t.request(target)).rejects.toThrow('stopped');
   });
 });
+
+
+describe('conditional paginated reads', () => {
+  it('validates every cached page and combines unchanged plus changed pages', async () => {
+    const page = (data: unknown, etag: string) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json', etag } });
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(page({ comments: [{ id: 'one' }], complete: false, nextCursor: 'next' }, 'page-one'))
+      .mockResolvedValueOnce(page({ comments: [{ id: 'two', text: 'old' }], complete: true }, 'page-two'))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { etag: 'page-one' } }))
+      .mockResolvedValueOnce(page({ comments: [{ id: 'two', text: 'new' }], complete: true }, 'page-two-new'));
+    const t = createReviewTransport(config(f)); await t.request(target);
+    const next = await (await t.request(target)).json();
+    expect(next.comments).toEqual([{ id: 'one' }, { id: 'two', text: 'new' }]);
+    expect(new Headers(f.mock.calls[3][1]!.headers).get('if-none-match')).toBe('page-one');
+    expect(new Headers(f.mock.calls[4][1]!.headers).get('if-none-match')).toBe('page-two'); t.stop();
+  });
+});
+
+describe('response bodies share the request deadline', () => {
+  it('cancels a stalled bootstrap body on teardown after headers arrived', async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+    const f = vi.fn<typeof fetch>().mockResolvedValue(response);
+    const t = createReviewTransport(config(f));
+    const result = t.getSession().then(() => 'unexpected success', e => e.message);
+    await new Promise(r => setTimeout(r, 0)); t.stop();
+    expect(await result).toContain('stopped'); expect(cancel).toHaveBeenCalledOnce();
+    expect((f.mock.calls[0][1]!.signal as AbortSignal).aborted).toBe(true);
+  });
+  it('times out a stalled body even though response headers succeeded', async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn(); const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+      const t = createReviewTransport(config(vi.fn<typeof fetch>().mockResolvedValue(response)));
+      const result = t.getSession().then(() => 'unexpected success', e => e.message);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await result).toContain('timed out'); expect(cancel).toHaveBeenCalledOnce(); t.stop();
+    } finally { vi.useRealTimers(); }
+  });
+});

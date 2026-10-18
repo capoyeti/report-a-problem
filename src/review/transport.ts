@@ -62,9 +62,10 @@ export function createReviewTransport(config: ReviewTransportConfig) {
   let session: ReviewSession | null = null;
   let pendingSession: Promise<ReviewSession> | null = null;
   const controllers = new Set<AbortController>();
+  const pageCache = new Map<string, { etag: string; data: { comments: unknown[]; complete?: unknown; nextCursor?: unknown } }>();
 
   function stop() {
-    stopped = true; session = null;
+    stopped = true; session = null; pageCache.clear();
     controllers.forEach(c => c.abort()); controllers.clear();
   }
   function loseAccess(): never {
@@ -76,13 +77,37 @@ export function createReviewTransport(config: ReviewTransportConfig) {
     const abort = () => controller.abort();
     if (init.signal?.aborted) controller.abort();
     init.signal?.addEventListener('abort', abort, { once: true });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let rejectAbort!: (error: Error) => void;
+    const interrupted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+    const onInterrupted = () => {
+      void reader?.cancel().catch(() => {});
+      rejectAbort(stopped ? new ReviewAccessError('stopped') : new DOMException('Review request timed out or was cancelled', 'AbortError'));
+    };
+    controller.signal.addEventListener('abort', onInterrupted, { once: true });
+    if (controller.signal.aborted) onInterrupted();
     const timeout = setTimeout(abort, 10_000);
     try {
-      const result = await f(url, { ...init, credentials: 'same-origin', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal });
+      const result = await Promise.race([f(url, { ...init, credentials: 'same-origin', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal }), interrupted]);
       if (stopped) throw new ReviewAccessError('stopped');
-      return result;
+      if (!result.body) return result;
+      reader = result.body.getReader();
+      const chunks: Uint8Array[] = []; let size = 0;
+      for (;;) {
+        const { value, done } = await Promise.race([reader.read(), interrupted]);
+        if (done) break;
+        size += value.byteLength;
+        if (size > 5 * 1024 * 1024) { await reader.cancel(); throw new RangeError('Shared response exceeds its limit'); }
+        chunks.push(value);
+      }
+      if (stopped) throw new ReviewAccessError('stopped');
+      if (controller.signal.aborted) throw new DOMException('Review request timed out or was cancelled', 'AbortError');
+      const bytes = new Uint8Array(size); let at = 0;
+      for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+      return new Response(bytes, { status: result.status, statusText: result.statusText, headers: result.headers });
     } finally {
-      clearTimeout(timeout); controllers.delete(controller); init.signal?.removeEventListener('abort', abort);
+      clearTimeout(timeout); reader?.releaseLock(); controllers.delete(controller);
+      controller.signal.removeEventListener('abort', onInterrupted); init.signal?.removeEventListener('abort', abort);
     }
   }
   async function getSession(force = false): Promise<ReviewSession> {
@@ -158,17 +183,27 @@ export function createReviewTransport(config: ReviewTransportConfig) {
     // ReviewJS expects one full snapshot. Drain all pages before exposing any,
     // so an interrupted later page cannot erase previously visible threads.
     const headers = new Headers(init.headers); headers.delete('if-none-match');
-    const comments: unknown[] = []; const cursors = new Set<string>();
+    const comments: unknown[] = []; const cursors = new Set<string>(); const visited = new Set<string>();
+    let bytes = 0;
     for (let page = 0; page <= 100; page++) {
+      const key = target.href; visited.add(key);
+      const cached = pageCache.get(key);
+      if (cached) headers.set('if-none-match', cached.etag); else headers.delete('if-none-match');
       const response = await oneRequest(target, { ...init, headers });
-      if (!response.ok) return response;
-      const data = await response.json() as { comments?: unknown; complete?: unknown; nextCursor?: unknown };
+      if (response.status !== 304 && !response.ok) return response;
+      if (response.status === 304 && !cached) throw new Error('Uncached shared comment page');
+      const data = response.status === 304 ? cached!.data : await response.json() as { comments: unknown[]; complete?: unknown; nextCursor?: unknown };
       if (!Array.isArray(data.comments)) throw new Error('Invalid shared comment snapshot');
+      bytes += new TextEncoder().encode(JSON.stringify(data)).byteLength;
+      if (bytes > 16 * 1024 * 1024) throw new Error('Shared page exceeds the supported snapshot size; ask the lead to archive earlier review content');
+      const etag = response.headers.get('etag');
+      if (etag) { if (pageCache.size > 200) pageCache.clear(); pageCache.set(key, { etag, data }); }
       comments.push(...data.comments);
       if (comments.length > 10_000) throw new Error('Shared comment snapshot exceeds campaign limit');
       if (data.complete === true || data.complete === undefined && data.nextCursor == null) {
+        for (const key of pageCache.keys()) if (!visited.has(key)) pageCache.delete(key);
         return new Response(JSON.stringify({ comments: [...new Map(comments.map(c => [(c as { id?: string }).id, c])).values()], complete: true, nextCursor: null }), {
-          status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+          status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-review-poll-after': String(Math.max(5000, (page + 1) * 1000)) },
         });
       }
       if (data.complete !== false || typeof data.nextCursor !== 'string' || !data.nextCursor || cursors.has(data.nextCursor)) throw new Error('Invalid shared comment cursor');
