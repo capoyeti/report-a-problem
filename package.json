@@ -12,7 +12,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./style.css": "./dist/style.css"
+    "./style.css": "./dist/style.css",
+    "./review-contract": {
+      "types": "./dist/review/contract.d.ts",
+      "default": "./dist/review/contract.js"
+    }
   },
   "files": [
     "dist",
