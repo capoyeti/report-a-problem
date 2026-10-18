@@ -20,6 +20,10 @@
     "./review": {
       "types": "./dist/review/index.d.ts",
       "default": "./dist/review/index.js"
+    },
+    "./review/server": {
+      "types": "./dist/review/server.d.ts",
+      "default": "./dist/review/server.js"
     }
   },
   "files": [
