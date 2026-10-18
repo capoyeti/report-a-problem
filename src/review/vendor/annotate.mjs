@@ -109,17 +109,27 @@ const createController = function (host) {
   // never crash, and never pretend a failed write persisted. dbWrite reports
   // success so callers can keep unsaved work in memory and surface the issue.
   var store = {
-    get: function (k) { try { return window.localStorage.getItem(integration ? integration.storageNamespace + ":" + k : k); } catch (e) { return null; } },
+    get: function (k) { try { var raw = window.localStorage.getItem(integration ? integration.storageNamespace + ':' + k : k);
+      if (!integration || raw === null) return raw;
+      var saved; try { saved = JSON.parse(raw); } catch (e) {}
+      if (!saved || saved.reviewDraft !== 1 || Date.now() > saved.expiresAt) { expiryNotice(); return null; }
+      return saved.value; } catch (e) { return null; } },
     // Returns whether the write actually reached storage. Callers must not
     // assume persistence on failure — that is what surfaces the unsaved banner.
     set: function (k, v) {
-      try { window.localStorage.setItem(integration ? integration.storageNamespace + ":" + k : k, v); return true; } catch (e) {
+      try { window.localStorage.setItem(integration ? integration.storageNamespace + ':' + k : k,
+        integration ? JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() + 7 * 86400000, value: v }) : v); return true; } catch (e) {
         if (e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED"))
           setTimeout(function () { toast("Storage full — export your comments before adding more.", { kind: "error", duration: 8000 }); }, 0);
         return false;
       }
     },
   };
+  var expiryShown = false;
+  function expiryNotice() {
+    if (expiryShown) return; expiryShown = true;
+    setTimeout(function () { ensureHost().appendChild(el('p', { id: '__an_expiry', role: 'alert', text: 'A saved draft expired after seven days or has an older format. It will not be shared. Start a new comment.' })); }, 0);
+  }
   var UNSAVED_MSG = "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";
   var quotaWarned = false;
   // Persistent (not toast) warning for the failure modes that toasts can't
@@ -310,6 +320,7 @@ const createController = function (host) {
       color: safeColor(c.color),
       anchor: c.anchor ? { exact: c.anchor.exact, prefix: c.anchor.prefix, suffix: c.anchor.suffix } : null,
       geom: normalizeGeom(c.geom),
+      originalContext: normalizeOriginalContext(c.originalContext),
       visibility: c.visibility === "private" ? "private" : "shared",
       status: status,
       resolved: closed,
@@ -364,12 +375,21 @@ const createController = function (host) {
   }
   function createComment(draft) {
     if (isReadOnly()) { toast("This review is read only."); return null; }
+    if (integration && (!String(draft.text || '').trim() || String(draft.text).length > MAX_COMMENT_TEXT)) {
+      toast('Write a description of 1 to 5,000 characters before sharing.', { kind: 'error' }); return null;
+    }
+    if (integration && draft.anchor && (!rangeFromQuote(draft.anchor) || resolveHighlightAnchor(draft.anchor).status !== 'ok')) {
+      toast('The selected text is private, ambiguous or unavailable. Select public text again.', { kind: 'error' }); return null;
+    }
+    if (integration && draft.geom && (!resolveAnchorEl(draft.geom.selector) || (draft.geom.points && draft.geom.points.length > 2000))) {
+      toast('This target is private, ambiguous or unavailable, or the drawing is too long. Choose another target.', { kind: 'error' }); return null;
+    }
     var d = dbRead(), now = new Date().toISOString();
     var c = {
       schema: SCHEMA,
       id: uid(),
       page: PAGE,
-      url: location.href,
+      url: integration ? location.origin + location.pathname : location.href,
       type: draft.type || "note",
       author: state.author || "Anonymous",
       authorId: state.authorId,
@@ -377,6 +397,7 @@ const createController = function (host) {
       color: safeColor(draft.color || state.color),
       anchor: draft.anchor || null,
       geom: draft.geom || null,
+      originalContext: integration ? originalContext(draft) : null,
       visibility: "shared",
       status: "open",
       resolved: false,
@@ -398,6 +419,13 @@ const createController = function (host) {
     return c;
   }
   function patchComment(id, changes) {
+    if (integration) {
+      if (changes.editReply) { toast('Reply editing is unavailable. Your draft is kept.', { kind: 'error' }); return null; }
+      var words = changes.reply ? changes.reply.text : changes.editReply ? changes.editReply.text : changes.text;
+      if (words !== undefined && (typeof words !== 'string' || !words.trim() || words.length > 5000)) {
+        toast('Use 1 to 5,000 characters. Your draft is kept.', { kind: 'error' }); return null;
+      }
+    }
     var d = dbRead();
     var c = d.comments.filter(function (x) { return x && x.id === id && x.page === PAGE; })[0];
     var fromUnsaved = !c;
@@ -519,6 +547,7 @@ const createController = function (host) {
     var q;
     try { q = JSON.parse(store.get(QUEUE_KEY) || "[]"); } catch (e) { q = []; }
     return (Array.isArray(q) ? q : []).filter(function (o) {
+      if (integration && o && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
       return o && OP_TYPES[o.t] === 1 && typeof o.id === "string" && typeof o.key === "string";
     });
   }
@@ -528,14 +557,14 @@ const createController = function (host) {
   }
   function remoteEnqueue(op) {
     if (!REMOTE) return;
-    op.key = idemKey();
+    op.key = idemKey(); if (integration) op.createdAt = Date.now();
     var q = readQueue();
     // Coalesce consecutive edits of one record into the queued PUT that has
     // not been sent yet; the body is built from the cache at send time.
     if (op.t === "put") {
       for (var i = q.length - 1; i >= 0; i--) {
         if (q[i].id !== op.id) continue;
-        if (q[i].t === "put" && !(sync.inflight && sync.inflight.key === q[i].key)) {
+        if (q[i].t === "put" && !(integration && q[i].payload) && !(sync.inflight && sync.inflight.key === q[i].key)) {
           q[i].f = q[i].f.indexOf("*") >= 0 || op.f.indexOf("*") >= 0 ? ["*"]
             : q[i].f.concat(op.f.filter(function (f) { return q[i].f.indexOf(f) < 0; }));
           writeQueue(q); syncChanged(); scheduleFlush(0);
@@ -563,7 +592,7 @@ const createController = function (host) {
   function remoteDelete(id, holdMs) {
     if (!REMOTE) return;
     var q = readQueue();
-    q.push({ t: "del", id: id, key: idemKey(), nb: Date.now() + (holdMs || 0) });
+    q.push({ t: "del", id: id, key: idemKey(), createdAt: Date.now(), nb: Date.now() + (holdMs || 0) });
     writeQueue(q);
     syncChanged();
     scheduleFlush(0);
@@ -590,6 +619,7 @@ const createController = function (host) {
   function syncState() {
     if (!REMOTE) return { state: "local", pending: 0 };
     var pending = readQueue().length;
+    if (integration && readQueue().some(function (o) { return o.held; })) sync.held = true;
     var s = sync.conflict ? "conflict" : sync.held ? "error" : sync.offline ? "offline" : pending ? "pending" : integration && !sync.loaded ? "loading" : "idle";
     return { state: s, pending: pending };
   }
@@ -791,7 +821,7 @@ const createController = function (host) {
     return { wait: wait };
   }
   function flushQueue() {
-    if (!REMOTE || destroyed || sync.inflight || sync.held) return;
+    if (!REMOTE || destroyed || sync.inflight || sync.held || integration && readQueue().some(function (o) { return o.held; })) return;
     var q = readQueue();
     syncChanged();
     if (!q.length) { settleWaiters(); return; }
@@ -819,12 +849,14 @@ const createController = function (host) {
     var d = dbRead();
     var rec = d.comments.filter(function (c) { return c && c.id === op.id; })[0] || unsaved[op.id];
     // The record is gone locally (its delete follows) or turned private.
-    if (op.t !== "del" && (!rec || !isValidComment(rec) || rec.visibility === "private")) return Promise.resolve({ skip: true });
+    if (op.t !== "del" && !(integration && op.t === "put" && op.payload) && (!rec || !isValidComment(rec) || rec.visibility === "private")) return Promise.resolve({ skip: true });
+    if (integration && op.t === 'put' && op.payload) return apiFetch('PUT', path, JSON.parse(op.payload), headers);
     if (op.t === "put") {
       var body = serialize(normalizeComment(rec));
       body.page = wirePage(body.page);
       body.replies = [];   // replies travel on their own endpoint
       body.updatedAt = serverStamps(d)[op.id] || body.updatedAt;   // the base for the stale check
+      if (integration) { op.payload = JSON.stringify(body); markOp(op, { payload: op.payload }); }
       return apiFetch("PUT", path, body, headers);
     }
     if (op.t === "del") return apiFetch("DELETE", path, undefined, headers);
@@ -880,13 +912,16 @@ const createController = function (host) {
       return;
     }
     if (integration && status === 409) {
+      markOp(op, { held: true, conflict: true });
       sync.held = true; sync.conflict = true; syncChanged();
+      renderPanel();
       settleWaiters(new Error("A newer comment needs your review. Your draft is kept here."));
       dispatch("annotate:conflict", { id: op.id });
       return;
     }
     if (integration && !res.ok && status !== 410) {
-      sync.held = true; syncChanged();
+      markOp(op, { held: true });
+      sync.held = true; syncChanged(); renderPanel();
       settleWaiters(new Error("Could not share this change. Your draft is kept here."));
       return;
     }
@@ -899,6 +934,10 @@ const createController = function (host) {
       else markOp(op, { key: idemKey(), n: attempts });
       scheduleFlush(0);
       return;
+    }
+    if (integration && status === 410 && op.t !== 'del') {
+      var lost = dbRead().comments.find(function (c) { return c.id === op.id; });
+      if (lost) { var deletedDrafts = JSON.parse(store.get('deleted-drafts') || '[]'); deletedDrafts.push(lost); store.set('deleted-drafts', JSON.stringify(deletedDrafts)); showDeletedDraft(lost); }
     }
     if (status === 410) {
       dropOps(function (o) { return o.id === op.id; });
@@ -929,6 +968,7 @@ const createController = function (host) {
     writeQueue(q);
   }
   function forgetRecord(id) {
+    if (integration) { var tombs = JSON.parse(store.get('tombstones') || '{}'); tombs[id] = true; store.set('tombstones', JSON.stringify(tombs)); }
     var d = dbRead();
     d.comments = d.comments.filter(function (c) { return !c || c.id !== id; });
     delete serverStamps(d)[id];
@@ -939,6 +979,7 @@ const createController = function (host) {
   // Server record → cache. Ops still queued for that id are re-applied on
   // top, so pending local work is never overwritten by an older server view.
   function fromWire(w) {
+    if (integration && JSON.parse(store.get('tombstones') || '{}')[w && w.id]) return null;
     if (!isValidComment(w) || typeof w.page !== "string" || w.visibility === "private") return null;
     var c = normalizeComment(w);
     c.page = localPage(w.page);
@@ -1000,7 +1041,7 @@ const createController = function (host) {
       if (!c || c.page !== PAGE || seen[c.id]) return;
       seen[c.id] = true;
       var previous = stamps[c.id];
-      stamps[c.id] = w.updatedAt;
+      if (!integration || !pending[c.id]) stamps[c.id] = w.updatedAt;
       if (!pending[c.id]) {
         if (marks[c.id] === undefined && (first || c.authorId && c.authorId === state.authorId)) marks[c.id] = w.updatedAt;
         else if (previous !== w.updatedAt && (marks[c.id] === undefined || w.updatedAt > marks[c.id])) fresh++;
@@ -1095,12 +1136,61 @@ const createController = function (host) {
     lastSyncSig = sig;
     backgroundLoad();
   }
+  function showDeletedDraft(c) {
+    if (document.getElementById('__an_deleted_' + c.id)) return;
+    var box = el('section', { id: '__an_deleted_' + c.id, class: 'an-deleted-draft', role: 'alert' });
+    box.appendChild(el('p', { text: 'This thread was deleted. Your local draft will not be shared: ' + c.text + ' ' + c.replies.map(function (r) { return r.text; }).join('; ') }));
+    box.appendChild(el('button', { class: 'an-ghost', text: 'Discard deleted thread draft', onclick: function () { store.set('deleted-drafts', JSON.stringify(JSON.parse(store.get('deleted-drafts') || '[]').filter(function (d) { return d.id !== c.id; }))); box.remove(); } }));
+    ensureHost().appendChild(box);
+  }
+  function decorateConflict(c, card) {
+    var held = readQueue().filter(function (o) { return o.id === c.id && o.held; });
+    if (!held.length) return;
+    var box = el('section', { class: 'an-conflict', 'aria-label': 'Compare saved draft' });
+    box.appendChild(el('p', { text: 'Could not share. Your local draft is kept. Reload the current shared version to compare before deciding.' }));
+    var local = el('p', { text: 'Your draft: ' + c.text + (c.replies.length ? ' Replies: ' + c.replies.map(function (r) { return r.text; }).join('; ') : '') });
+    box.appendChild(local);
+    var reload = el('button', { class: 'an-ghost', text: 'Compare / reload shared version' });
+    box.appendChild(reload);
+    listen(reload, 'click', function (e) {
+      e.stopPropagation(); reload.disabled = true;
+      apiFetch('GET', '/comments?page=' + encodeURIComponent(wirePage(PAGE))).then(function (r) {
+        reload.disabled = false;
+        if (!r.res.ok || !r.data || !Array.isArray(r.data.comments)) { toast('Could not load the current version. Your draft is kept.'); return; }
+        var current = r.data.comments.find(function (w) { return w.id === c.id; });
+        box.querySelectorAll('.an-current,.an-decision').forEach(function (n) { n.remove(); });
+        box.appendChild(el('p', { class: 'an-current', text: current ? 'Current shared text: ' + current.text + ' Replies: ' + current.replies.map(function (v) { return v.text; }).join('; ') : 'This comment is no longer available on the server.' }));
+        var discard = el('button', { class: 'an-ghost an-decision', text: 'Discard my local change' });
+        box.appendChild(discard);
+        listen(discard, 'click', function (ev) {
+          ev.stopPropagation(); dropOps(function (o) { return o.id === c.id; });
+          if (current) applyServer(current, null); else forgetRecord(c.id);
+          releaseHold(); loadData();
+        });
+        if (current || !serverStamps(dbRead())[c.id] && !held.some(function (o) { return o.conflict; })) {
+          var retry = el('button', { class: 'an-primary an-decision', text: 'Retry my change against this version' });
+          box.appendChild(retry);
+          listen(retry, 'click', function (ev) {
+            ev.stopPropagation(); var d = dbRead(); if (current) serverStamps(d)[c.id] = current.updatedAt; dbWrite(d);
+            writeQueue(readQueue().map(function (o) { return o.id === c.id ? Object.assign({}, o, { held: false, conflict: false, payload: null, key: idemKey() }) : o; }));
+            releaseHold(); scheduleFlush(0); renderPanel();
+          });
+        }
+      }, function () { reload.disabled = false; toast('Could not load the current version. Your draft is kept.'); });
+    });
+    card.appendChild(box);
+  }
+  function releaseHold() {
+    sync.held = readQueue().some(function (o) { return o.held; });
+    sync.conflict = readQueue().some(function (o) { return o.conflict; }); syncChanged();
+  }
   function flushAll() {
     if (!REMOTE) return Promise.resolve();
     // An explicit submit ends any undo window.
     var q = readQueue();
     q.forEach(function (o) { o.nb = 0; });
     writeQueue(q);
+    if (integration && (sync.held || readQueue().some(function (o) { return o.held; }))) return Promise.reject(new Error('Compare the saved draft before retrying.'));
     sync.held = false;
     return new Promise(function (resolve, reject) {
       sync.waiters.push({ resolve: resolve, reject: reject });
@@ -1109,7 +1199,44 @@ const createController = function (host) {
   }
 
   // unique-ish css selector for an element (for re-anchoring overlays)
+  var PRIVATE_TARGET = '[data-review-private],[data-review-exclude],form,input,textarea,select,option,[contenteditable]:not([contenteditable="false"])';
+  function privateTarget(node) {
+    var n = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !n || !!n.closest(PRIVATE_TARGET);
+  }
+  function safeTarget(node) {
+    return node && !isOurs(node) && !privateTarget(node) && !node.querySelector(PRIVATE_TARGET);
+  }
+  function privateRange(range) {
+    if (privateTarget(range.startContainer) || privateTarget(range.endContainer)) return true;
+    return Array.prototype.some.call(document.querySelectorAll(PRIVATE_TARGET), function (n) {
+      return !isOurs(n) && range.intersectsNode(n);
+    });
+  }
+  function componentLabel(node) {
+    return String(node && (node.getAttribute('data-review-label') || node.getAttribute('aria-label') || node.getAttribute('data-review-id') || node.nodeName.toLowerCase()) || 'Page note').trim().slice(0, 200) || 'Page note';
+  }
+  function originalContext(draft) {
+    var node = draft.geom && resolveAnchorEl(draft.geom.selector);
+    return { componentLabel: draft.componentLabel || componentLabel(node), description: draft.text,
+      viewport: { vw: window.innerWidth, vh: window.innerHeight }, snapshotAttachmentId: null };
+  }
+  function normalizeOriginalContext(c) {
+    if (!c || typeof c.componentLabel !== 'string' || !c.componentLabel.trim() || c.componentLabel.length > 200 ||
+        typeof c.description !== 'string' || !c.description.trim() || c.description.length > 5000 ||
+        !c.viewport || !(c.viewport.vw > 0) || !(c.viewport.vh > 0)) return null;
+    return { componentLabel: c.componentLabel, description: c.description,
+      viewport: { vw: c.viewport.vw, vh: c.viewport.vh }, snapshotAttachmentId: c.snapshotAttachmentId || null };
+  }
   function cssPath(node) {
+    if (integration) {
+      if (!safeTarget(node)) return null;
+      var stable = node.getAttribute('data-review-id');
+      if (stable) {
+        var selector = '[data-review-id="' + CSS.escape(stable) + '"]';
+        return document.querySelectorAll(selector).length === 1 ? selector : null;
+      }
+    }
     if (node === document.body) return "body";
     if (node.id) return "#" + CSS.escape(node.id);
     var parts = [];
@@ -1126,7 +1253,10 @@ const createController = function (host) {
     return (parts[0] && parts[0][0] === "#" ? "" : "body > ") + parts.join(" > ");
   }
   function resolveAnchorEl(selector) {
-    try { return document.querySelector(selector); } catch (e) { return null; }
+    try {
+      var nodes = document.querySelectorAll(selector);
+      return nodes.length === 1 && (!integration || safeTarget(nodes[0])) ? nodes[0] : null;
+    } catch (e) { return null; }
   }
 
   // Trap Tab focus inside a modal container; returns a cleanup function.
@@ -1666,7 +1796,7 @@ const createController = function (host) {
   // ==========================================================================
   // ICONS — inline SVG markup, keyed by name (tool icons share the tool's key)
   // ==========================================================================
-  if (integration) CSS_TEXT += "/* Integration boundary: host button styles must not shrink review icons. */\n#__an_host { font-size:14px; }\n#__an_host .an-btn, #__an_host #__an_colorbtn {\n  width:44px; height:44px; min-width:44px; min-height:44px;\n  padding:0; margin:0; box-sizing:border-box; flex-shrink:0;\n}\n#__an_host .an-btn svg { width:20px; height:20px; flex-shrink:0; }\n#__an_host .an-mini, #__an_host .an-hbtn, #__an_host .an-x,\n#__an_host .an-primary, #__an_host .an-ghost, #__an_host .an-status {\n  min-height:44px; margin:0; box-sizing:border-box;\n}\n#__an_host .an-mini, #__an_host .an-primary, #__an_host .an-ghost {\n  font-size:14px; padding:8px 12px;\n}\n#__an_host .an-body, #__an_host .an-reply, #__an_host .an-ta,\n#__an_host .an-empty, #__an_host .an-localnote { font-size:14px; }\n#__an_host .an-localnote.an-synced { color:#087347; }\n#__an_host .an-cact { flex-wrap:wrap; }\n#__an_host button:focus-visible, #__an_host textarea:focus-visible,\n#__an_host select:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\n#__an_host.an-readonly [data-tool]:not([data-tool=\"cursor\"]),\n#__an_host.an-readonly #__an_plus, #__an_host.an-readonly .an-replybox,\n#__an_host.an-readonly .an-editbox,\n#__an_host.an-readonly .an-cact button:not(.an-histbtn):not([title=\"Copy link to this comment\"]) { display:none; }\n";
+  if (integration) CSS_TEXT += "/* Integration boundary: host button styles must not shrink review icons. */\n#__an_host { font-size:14px; }\n#__an_host .an-btn, #__an_host #__an_colorbtn {\n  width:44px; height:44px; min-width:44px; min-height:44px;\n  padding:0; margin:0; box-sizing:border-box; flex-shrink:0;\n}\n#__an_host .an-btn svg { width:20px; height:20px; flex-shrink:0; }\n#__an_host .an-mini, #__an_host .an-hbtn, #__an_host .an-x,\n#__an_host .an-primary, #__an_host .an-ghost, #__an_host .an-status {\n  min-height:44px; margin:0; box-sizing:border-box;\n}\n#__an_host .an-mini, #__an_host .an-primary, #__an_host .an-ghost {\n  font-size:14px; padding:8px 12px;\n}\n#__an_host .an-body, #__an_host .an-reply, #__an_host .an-ta,\n#__an_host .an-empty, #__an_host .an-localnote { font-size:14px; }\n#__an_host .an-localnote.an-synced { color:#087347; }\n#__an_host .an-cact { flex-wrap:wrap; }\n#__an_host button:focus-visible, #__an_host textarea:focus-visible,\n#__an_host select:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\n#__an_host.an-readonly [data-tool]:not([data-tool=\"cursor\"]),\n#__an_host.an-readonly #__an_plus, #__an_host.an-readonly .an-replybox,\n#__an_host.an-readonly .an-editbox,\n#__an_host.an-readonly .an-cact button:not(.an-histbtn):not([title=\"Copy link to this comment\"]) { display:none; }\n/* Explicit marking preserves browser gestures until a drawing tool is chosen. */\nbody.an-review-selecting { cursor:crosshair; touch-action:pan-x pan-y pinch-zoom; }\n#__an_targetoutline { position:fixed; border:3px solid #245da8; outline:2px solid white; pointer-events:none; z-index:2147483250; box-sizing:border-box; }\n#__an_target { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); width:min(560px,calc(100vw - 24px)); max-height:45dvh; overflow:auto; z-index:2147483300; padding:12px; border:2px solid #245da8; border-radius:12px; background:var(--an-bg,#fff); color:var(--an-fg,#172b3a); display:flex; flex-wrap:wrap; gap:8px; box-sizing:border-box; }\n#__an_target strong { flex:1 0 100%; overflow-wrap:anywhere; }\n#__an_host .an-context, #__an_host .an-conflict { font-size:14px; line-height:1.5; overflow-wrap:anywhere; }\n#__an_host .an-context { margin:8px 0; }\n#__an_host .an-conflict { border:2px solid #996300; padding:10px; border-radius:8px; }\n#__an_host .an-conflict button { display:block; width:100%; margin:6px 0; white-space:normal; }\n#__an_expiry { position:fixed; left:12px; right:12px; top:12px; padding:12px; margin:0; background:#fff4d6; color:#563600; border:2px solid #996300; z-index:2147483400; }\n#__an_host .an-hbtn, #__an_host .an-x, #__an_host .an-chip { min-width:44px; min-height:44px; }\n#__an_host .an-ph { flex-wrap:wrap; gap:6px; }\n#__an_host .an-chip { font:inherit; }\n#__an_host .an-body, #__an_host .an-reply { overflow-wrap:anywhere; }\n#__an_host #__an_compose { box-sizing:border-box; max-width:calc(100vw - 16px); }\n#__an_host .an-cfoot { flex-wrap:wrap; gap:6px; }\n#__an_host .an-ta, #__an_host input, #__an_host select { font-size:16px; }\n#__an_host .an-ckbd { display:none; }\n@media (max-width:900px), (max-height:550px) {\n  #__an_host #__an_compose { position:fixed; left:8px !important; right:8px; top:auto !important; bottom: max(8px,calc(100dvh - var(--an-vh,100dvh) - var(--an-vtop,0px))); width:auto; max-width:none; max-height:calc(var(--an-vh,100dvh) - 16px); overflow-y:auto; padding:14px 14px max(14px,env(safe-area-inset-bottom)); border-radius:16px 16px 6px 6px; }\n  #__an_host #__an_compose .an-ta { min-height:72px; max-height:24dvh; }\n  #__an_host #__an_panel { top:calc(var(--an-vtop,0px) + 8px); bottom:auto; right:8px; left:8px; width:auto; height:calc(var(--an-vh,100dvh) - 16px); max-height:none; border-radius:14px; transform:translateY(110dvh); padding-bottom:env(safe-area-inset-bottom); }\n  #__an_host #__an_panel.an-open { transform:translateY(0); }\n  #__an_host #__an_bar { right:8px !important; bottom:max(8px,env(safe-area-inset-bottom)); max-height:calc(100dvh - 16px); overflow:auto; }\n  #__an_host #__an_hint { top:8px; max-width:calc(100vw - 24px); width:max-content; white-space:normal; font-size:14px; }\n  #__an_host .an-ph h2 { flex:1 0 60%; }\n  #__an_host .an-list { min-height:0; overscroll-behavior:contain; }\n}\n@media (prefers-reduced-motion:reduce) { #__an_host * { transition:none !important; scroll-behavior:auto !important; } }\n/* Keep controls readable and remove overlay chrome while composing. */\n#__an_host { --an-muted:#565665; --an-ok:#087347; }\n#__an_host.an-dark { --an-muted:#b5b5c0; --an-ok:#72ddb0; }\n#__an_host .an-cact { opacity:1; }\n#__an_host #__an_panel:not(.an-open) { display:none; }\n#__an_host:has(#__an_compose.an-show) #__an_bar,\n#__an_host:has(#__an_compose.an-show) #__an_hint { display:none; }\n#__an_host .an-ph h2 { order:0; flex:1; }\n#__an_host .an-ph .an-pcount { order:1; }\n#__an_host .an-ph .an-x { order:2; }\n#__an_host .an-ph > .an-ghost { order:3; flex:1 1 42%; }\n#__an_host #__an_compose .an-ctitle { font-size:14px; }\n#__an_host .an-deleted-draft { position:fixed; top:12px; left:12px; right:12px; max-height:40dvh; overflow:auto; padding:12px; border:2px solid #996300; background:var(--an-surface); color:var(--an-fg); z-index:2147483400; }\n@media (max-width:900px), (max-height:550px) { #__an_host #__an_root.an-popen #__an_bar { display:none; } }\nbody.an-drawing #__an_overlay *, body.an-drawing #__an_pins *,\nbody.an-review-selecting #__an_overlay *, body.an-review-selecting #__an_pins * { pointer-events:none !important; }\n#__an_host .an-original-context summary { min-height:44px; display:list-item; align-content:center; cursor:pointer; }\n#__an_host .an-original-context summary:focus-visible { outline:3px solid #245da8; outline-offset:2px; }\nbody.an-review-browse #__an_overlay *, body.an-review-browse #__an_pins * { pointer-events:none !important; }\n";
   var ICONS = {
     cursor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.5 18 2.2-7.3L20 11.5z"/></svg>',
     highlight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h3l6-6"/><path d="M22 3l-7 7-4-4 7-7z" transform="translate(-2 2)"/><path d="M12.5 6.5l5 5"/></svg>',
@@ -1749,7 +1879,7 @@ const createController = function (host) {
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
-        if (isOurs(n.parentNode)) return NodeFilter.FILTER_REJECT;
+        if (isOurs(n.parentNode) || integration && privateTarget(n)) return NodeFilter.FILTER_REJECT;
         var p = n.parentNode.nodeName;
         if (p === "SCRIPT" || p === "STYLE" || p === "NOSCRIPT")
           return NodeFilter.FILTER_REJECT;
@@ -1762,6 +1892,7 @@ const createController = function (host) {
   }
 
   function quoteFromRange(range) {
+    if (integration && privateRange(range)) return null;
     var exact = range.toString();
     if (!exact.trim()) return null;
     var CTX = 48;
@@ -1808,7 +1939,7 @@ const createController = function (host) {
     var r = document.createRange();
     r.setStart(sn.node, sn.offset);
     r.setEnd(en.node, en.offset);
-    return r;
+    return integration && privateRange(r) ? null : r;
   }
   function locate(map, globalOff) {
     for (var i = map.length - 1; i >= 0; i--) {
@@ -1830,6 +1961,7 @@ const createController = function (host) {
     return true;
   }
   function paintRange(range, color, id) {
+    if (integration && privateRange(range)) return [];
     ensureOverlay();
     var fragments = [];
 
@@ -1893,8 +2025,10 @@ const createController = function (host) {
     sizeOverlay();
   }
   function sizeOverlay() {
+    if (integration && overlay) { overlay.setAttribute('width', 0); overlay.setAttribute('height', 0); overlay.style.width = '0px'; overlay.style.height = '0px'; }
     var w = Math.max(document.documentElement.scrollWidth, window.innerWidth);
     var h = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+    if (integration) w = document.documentElement.clientWidth;
     overlay.setAttribute("width", w);
     overlay.setAttribute("height", h);
     overlay.style.width = w + "px";
@@ -2020,6 +2154,7 @@ const createController = function (host) {
   // (2+ matches) since it was written. `slot` is the pre-computed stack index
   // among unanchored comments (see renderAll) so positioning stays O(1).
   function unanchoredPill(c, slot) {
+    if (integration) return;
     var idx = state.comments.indexOf(c) + 1;
     var pill = el("div", { class: "an-unanchored-pill", title: "The quoted text for comment #" + idx +
       " can’t be found (or appears multiple times), so it isn’t highlighted. Open the comment for details." },
@@ -2056,6 +2191,7 @@ const createController = function (host) {
         }
         c.__unanchored = false;
         var r = rangeFromQuote(c.anchor, resolved.legacy);
+        if (!r) c.__unanchored = "unavailable";
         if (r) {
           var marks = paintRange(r, c.color, c.id);
           marks.forEach(function (m) {
@@ -2089,7 +2225,8 @@ const createController = function (host) {
 
   function renderBlock(c) {
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
-    if (!anchorVisible(anchorEl)) return;
+    if (!anchorVisible(anchorEl)) { c.__anchorMissing = true; return; }
+    c.__anchorMissing = false;
     var box = docBox(anchorEl);
     rememberAnchor(c, box);
     var idx = state.comments.indexOf(c) + 1;
@@ -2109,7 +2246,7 @@ const createController = function (host) {
   }
 
   function viewportMismatch(g) {
-    return g && g.vw && Math.abs(g.vw - window.innerWidth) > 200;
+    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 1 || Math.abs(g.vh - window.innerHeight) > 1 : Math.abs(g.vw - window.innerWidth) > 200);
   }
   function renderGeom(c, missingSlot) {
     // A shape only makes sense relative to its anchor element. If that
@@ -2120,7 +2257,7 @@ const createController = function (host) {
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
     if (!anchorEl) { c.__anchorMissing = true; renderMissingAnchor(c, missingSlot); return; }
     c.__anchorMissing = false;
-    if (!anchorVisible(anchorEl)) return;
+    if (!anchorVisible(anchorEl) || integration && viewportMismatch(c.geom)) { c.__anchorMissing = true; return; }
     var box = docBox(anchorEl);
     rememberAnchor(c, box);
     var g = c.geom;
@@ -2181,6 +2318,7 @@ const createController = function (host) {
   // Positioned at a stable page offset (never over <body>, which would imply
   // the annotation still has a valid position).
   function renderMissingAnchor(c, missingSlot) {
+    if (integration) return;
     var idx = state.comments.indexOf(c) + 1;
     var badgeR = 13;
     var bx = 40 + missingSlot * 36;
@@ -2203,7 +2341,7 @@ const createController = function (host) {
 
   function renderPin(c, missingSlot) {
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
-    if (!anchorEl && c.geom.selector !== "body") { c.__anchorMissing = true; renderMissingAnchor(c, missingSlot); return; }
+    if ((!anchorEl || integration && !anchorVisible(anchorEl)) && (integration || c.geom.selector !== "body")) { c.__anchorMissing = true; renderMissingAnchor(c, missingSlot); return; }
     if (!anchorEl) anchorEl = document.body;
     c.__anchorMissing = false;
     if (!anchorVisible(anchorEl)) return;
@@ -2225,11 +2363,43 @@ const createController = function (host) {
   // COMPOSER (new comment popover)
   // ==========================================================================
   var composer, pendingDraft = null, composerShownAt = 0;
+  function saveComposerDraft() {
+    if (!integration || !pendingDraft || !composer) return;
+    var ta = composer.querySelector('textarea');
+    var saved = { draft: serialize(pendingDraft), text: ta ? ta.value : '', createdAt: pendingDraft.__draftStarted || Date.now() };
+    pendingDraft.__draftStarted = saved.createdAt;
+    store.set('composer', JSON.stringify(saved));
+  }
+  function resumeDraft() {
+    var raw = store.get('composer'); if (!raw) return;
+    var saved; try { saved = JSON.parse(raw); } catch (e) { return; }
+    if (!saved || !saved.draft || !saved.createdAt || Date.now() - saved.createdAt > 7 * 86400000) { expiryNotice(); return; }
+    saved.draft.__draftStarted = saved.createdAt;
+    openComposer(20, 100, saved.draft);
+    composer.querySelector('textarea').value = saved.text || '';
+  }
+  function composerViewport() {
+    if (!integration) return;
+    var v = window.visualViewport;
+    ensureHost().style.setProperty('--an-vh', (v ? v.height : window.innerHeight) + 'px');
+    ensureHost().style.setProperty('--an-vtop', (v ? v.offsetTop : 0) + 'px');
+  }
+  if (integration) {
+    listen(window, 'resize', composerViewport);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', composerViewport);
+      window.visualViewport.addEventListener('scroll', composerViewport);
+      cleanups.push(function () { window.visualViewport.removeEventListener('resize', composerViewport); window.visualViewport.removeEventListener('scroll', composerViewport); });
+    }
+    listen(window, 'pagehide', saveComposerDraft);
+    listen(document, 'visibilitychange', function () { if (document.hidden) saveComposerDraft(); });
+  }
   function ensureComposer() {
     if (composer) return;
-    composer = el("div", { id: "__an_compose" });
+    composer = el("div", { id: "__an_compose", role: "dialog", "aria-label": "Write review comment" });
     ensureHost().appendChild(composer);
     listen(document, "pointerdown", function (e) {
+      if (integration) return;
       if (performance.now() - composerShownAt < 120) return;
       // The name dialog opens over a draft whose Comment asked for a name;
       // using the dialog must not cancel that draft.
@@ -2255,7 +2425,9 @@ const createController = function (host) {
     ]));
     if (draft.anchor && draft.anchor.exact)
       composer.appendChild(el("div", { class: "an-cquote", text: draft.anchor.exact }));
-    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…" });
+    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…", 'aria-label': 'Review description' });
+    if (integration) { ta.value = draft.text || ''; listen(ta, 'input', saveComposerDraft); }
+    if (integration) composer.appendChild(el('p', { class: 'an-context', text: 'Target: ' + (draft.componentLabel || componentLabel(draft.geom && resolveAnchorEl(draft.geom.selector))) + (draft.type === 'pen' ? '. A description is required. Original description only; no snapshot is available.' : '') }));
     composer.appendChild(ta);
     var save = el("button", { class: "an-primary", text: "Comment" });
     var cancel = el("button", { class: "an-ghost", text: "Cancel" });
@@ -2263,6 +2435,7 @@ const createController = function (host) {
     var isMac = /Mac|iPhone|iPad/i.test(plat);
     composer.appendChild(el("div", { class: "an-cfoot" }, [
       el("span", { class: "an-ckbd", text: (isMac ? "⌘" : "Ctrl") + "↵ to post" }),
+      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: function () { saveComposerDraft(); composer.classList.remove('an-show'); setTool('cursor'); } }) : null,
       cancel, save,
     ]));
     listen(save, "click", function () {
@@ -2304,6 +2477,7 @@ const createController = function (host) {
     composer.style.left = (px + window.scrollX) + "px";
     composer.style.top = (py + window.scrollY) + "px";
     composer.classList.add("an-show");
+    if (integration) { closePanel(); composerViewport(); saveComposerDraft(); }
     setTimeout(function () { ta.focus(); }, 30);
   }
   function askName(onDone) {
@@ -2358,6 +2532,8 @@ const createController = function (host) {
     tempMarks = [];
   }
   function cancelDraft() {
+    if (integration) { store.set('composer', 'null'); clearTarget(); cancelDrawing(); }
+    if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true });
     pendingDraft = null;
     clearTemp();
     if (composer) composer.classList.remove("an-show");
@@ -2365,8 +2541,10 @@ const createController = function (host) {
   }
   function commitDraft(draft) {
     if (destroyed || pendingDraft !== draft) return;
+    if (integration && draft.__draftStarted && Date.now() - draft.__draftStarted > 7 * 86400000) { expiryNotice(); return; }
     var c = createComment(draft);
     if (!c) return;
+    if (integration) store.set('composer', 'null');
     composer.classList.remove("an-show");
     clearTemp();
     state.comments.push(c);
@@ -2376,6 +2554,10 @@ const createController = function (host) {
     renderPanel();
     openPanel();
     setTool("cursor");
+    if (integration && listEl) {
+      var savedCard = listEl.querySelector('[data-id="' + c.id + '"]');
+      if (savedCard) { savedCard.setAttribute('tabindex', '-1'); savedCard.focus({ preventScroll: true }); }
+    }
     pendingDraft = null;
   }
 
@@ -2384,7 +2566,7 @@ const createController = function (host) {
   // ==========================================================================
   var justCancelledDraw = false;
   listen(document, "pointerup", function (e) {
-    if (!state.enabled) return;
+    if (!state.enabled || integration && (state.tool !== "highlight" || isOurs(e.target))) return;
     if (drawing) return;
     if (justCancelledDraw) { justCancelledDraw = false; return; }
     if (state.tool === "pin") return;
@@ -2395,7 +2577,7 @@ const createController = function (host) {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) return;
       var range = sel.getRangeAt(0);
-      if (isOurs(range.commonAncestorContainer)) return;
+      if (isOurs(range.commonAncestorContainer) || integration && privateRange(range)) return;
       var q = quoteFromRange(range);
       if (!q) return;
       var rect = range.getBoundingClientRect();
@@ -2406,43 +2588,73 @@ const createController = function (host) {
   });
 
   var drawing = null;
-  function onDown(e) {
-    if (isReadOnly()) return;
-    if (!state.enabled) return;
-    if (e.button !== 0 && e.pointerType === "mouse") return;
-    // The name dialog too: a click there must not start a new pin or shape
-    // over the draft that is waiting for the name.
-    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts") || e.target.closest("#__an_namewrap")))
-      return;
-    var t = state.tool;
-    if (t === "pin") {
-      if (integration) { e.preventDefault(); e.stopPropagation(); }
-      var anchorEl = pickAnchor(e.target);
-      var box = docBox(anchorEl);
-      var fx = (e.pageX - box.x) / box.w, fy = (e.pageY - box.y) / box.h;
-      openComposer(e.clientX + 6, e.clientY + 6, {
-        type: "pin", color: state.color,
-        geom: { kind: "pin", selector: cssPath(anchorEl), x: clamp01(fx), y: clamp01(fy),
-          vw: window.innerWidth, vh: window.innerHeight },
-      });
-      return;
+  var tapStart = null, targetChoice = null, targetBox = null, targetOutline = null, focusBeforeDraft = null;
+  function cancelDrawing() {
+    if (drawing && drawing.node && drawing.node.parentNode) drawing.node.remove();
+    drawing = null; tapStart = null; clearTemp();
+  }
+  function clearTarget() {
+    targetChoice = null;
+    if (targetBox) targetBox.remove(); if (targetOutline) targetOutline.remove();
+    targetBox = targetOutline = null;
+  }
+  function positionTarget() {
+    if (!targetChoice || !targetOutline) return;
+    var r = targetChoice.getBoundingClientRect();
+    Object.assign(targetOutline.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  }
+  function chooseTarget(node) {
+    if (!safeTarget(node) || !cssPath(node) || !anchorVisible(node)) { toast('This target is private, ambiguous or unavailable. Choose another element.'); return; }
+    clearTarget(); targetChoice = node; focusBeforeDraft = node;
+    targetOutline = el('div', { id: '__an_targetoutline', 'aria-hidden': 'true' });
+    targetBox = el('section', { id: '__an_target', role: 'dialog', 'aria-label': 'Confirm review target' });
+    targetBox.appendChild(el('strong', { text: 'Target: ' + componentLabel(node) }));
+    function button(text, action, disabled) { var b = el('button', { class: 'an-ghost', text: text }); b.disabled = !!disabled; listen(b, 'click', action); targetBox.appendChild(b); return b; }
+    button('Parent element', function () { chooseTarget(node.parentElement); }, !safeTarget(node.parentElement));
+    var children = Array.prototype.filter.call(node.children, function (n) { return safeTarget(n) && anchorVisible(n); });
+    children.forEach(function (child) { button('Child: ' + componentLabel(child), function () { chooseTarget(child); }); });
+    var confirm = button('Use this target', function () {
+      if (!cssPath(node) || !safeTarget(node)) { clearTarget(); return; }
+      var label = componentLabel(node), geom = { kind: 'pin', selector: cssPath(node), x: 0.5, y: 0.5, vw: window.innerWidth, vh: window.innerHeight };
+      clearTarget(); openComposer(20, 100, { type: 'pin', color: state.color, componentLabel: label, geom: geom });
+    });
+    button('Cancel marking', function () { clearTarget(); setTool('cursor'); if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true }); });
+    ensureHost().appendChild(targetOutline); ensureHost().appendChild(targetBox); positionTarget(); confirm.focus({ preventScroll: true });
+  }
+  listen(window, 'scroll', positionTarget, true); listen(window, 'resize', positionTarget);
+  listen(document, 'pointercancel', function () { if (integration) { var wasDrawing = !!drawing; cancelDrawing(); if (wasDrawing) { clearTarget(); setTool('cursor'); } } }, true);
+  listen(document, 'pointerup', function (e) {
+    if (!integration || !tapStart) return;
+    var start = tapStart; tapStart = null;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) <= 10 && Math.abs(window.scrollY - start.scrollY) <= 5) chooseTarget(start.node);
+  }, true);
+  listen(document, 'keydown', function (e) {
+    if (!integration || !state.enabled) return;
+    if (e.key === 'Escape') { cancelDrawing(); clearTarget(); if (pendingDraft) cancelDraft(); setTool('cursor'); return; }
+    if (state.tool === 'pin' && !isOurs(e.target) && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); e.stopImmediatePropagation(); chooseTarget(e.target);
     }
-    if (t === "rect" || t === "circle" || t === "pen") {
-      e.preventDefault();
-      ensureOverlay();
-      var anchor = pickAnchor(e.target);
-      drawing = {
-        tool: t, anchorEl: anchor, box: docBox(anchor),
-        startX: e.pageX, startY: e.pageY, points: [[e.pageX, e.pageY]], node: null,
-      };
-      // Capture pointer so pointermove/pointerup are reliably delivered during touch drawing
-      if (e.pointerId != null && overlay && overlay.setPointerCapture)
-        try { overlay.setPointerCapture(e.pointerId); } catch (ex) {}
+  }, true);
+  function onDown(e) {
+    if (isReadOnly() || !state.enabled || isOurs(e.target)) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    var t = state.tool;
+    if (integration && t === 'pin') {
+      tapStart = { node: e.target, x: e.clientX, y: e.clientY, scrollY: window.scrollY }; return;
+    }
+    if (t === 'pin') { chooseTarget(e.target); return; }
+    if (t === 'rect' || t === 'circle' || t === 'pen') {
+      var anchor = integration ? e.target : pickAnchor(e.target);
+      if (integration && (!safeTarget(anchor) || !cssPath(anchor))) { toast('Choose a public, unique component to draw on.'); return; }
+      e.preventDefault(); e.stopPropagation(); ensureOverlay();
+      drawing = { tool: t, anchorEl: anchor, box: docBox(anchor), startX: e.pageX, startY: e.pageY, points: [[e.pageX, e.pageY]], node: null };
+      if (e.pointerId != null && overlay && overlay.setPointerCapture) try { overlay.setPointerCapture(e.pointerId); } catch (ex) {}
     }
   }
   function onMove(e) {
     if (!drawing) return;
     e.preventDefault();
+    if (integration && drawing.points.length >= 2000) { cancelDrawing(); setTool('cursor'); toast('Drawing is too long. Use fewer than 2,000 points.', { kind: 'error' }); return; }
     var d = drawing;
     if (d.node) overlay.removeChild(d.node);
     if (d.tool === "rect") {
@@ -2617,6 +2829,8 @@ const createController = function (host) {
     panel = el("div", { id: "__an_panel" });
     var header = el("div", { class: "an-ph" }, [
       el("h2", { text: "Comments" }),
+      integration ? el('button', { class: 'an-ghost', text: 'Mark this page', onclick: function () { setTool('pin'); } }) : null,
+      integration ? el('button', { class: 'an-ghost', text: 'Resume draft', onclick: resumeDraft }) : null,
       el("span", { class: "an-pcount", id: "__an_sub", text: "0" }),
       integration ? null : el("button", { class: "an-hbtn", html: ICONS.upload, title: "Import comments from a JSON file", "aria-label": "Import comments from a JSON file", onclick: function (e) { e.stopPropagation(); pickImportFile(); } }),
       integration ? null : el("button", { class: "an-hbtn", html: ICONS.download, title: "Download comments as JSON", "aria-label": "Download comments as JSON", onclick: function (e) { e.stopPropagation(); exportComments(); } }),
@@ -2625,7 +2839,7 @@ const createController = function (host) {
     var search = el("div", { class: "an-search" }, [
       (function () { var s = el("span", { html: ICONS.search }); return s.firstChild; })(),
     ]);
-    var searchInput = el("input", { placeholder: "Search comments…" });
+    var searchInput = el("input", { placeholder: "Search comments…", "aria-label": "Search comments" });
     listen(searchInput, "input", function () {
       state.query = searchInput.value.toLowerCase();
       renderPanel();
@@ -2633,7 +2847,7 @@ const createController = function (host) {
     search.appendChild(searchInput);
     var filters = el("div", { class: "an-filters" });
     [["open", "Open"], ["resolved", "Resolved"], ["all", "All"]].forEach(function (f) {
-      var ch = el("span", { class: "an-chip" + (state.filter === f[0] ? " an-on" : ""), "data-f": f[0], text: f[1] });
+      var ch = el("button", { type: "button", class: "an-chip" + (state.filter === f[0] ? " an-on" : ""), "data-f": f[0], text: f[1] });
       listen(ch, "click", function () {
         state.filter = f[0];
         filters.querySelectorAll(".an-chip").forEach(function (x) {
@@ -2671,7 +2885,7 @@ const createController = function (host) {
     });
 
     var rt;
-    listen(window, "resize", function () { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
+    listen(window, "resize", function () { clearTimeout(rt); rt = setTimeout(function () { renderAll(); if (integration) renderPanel(); }, 150); });
     // Keep tabs in sync: reload annotations when another tab writes to storage
     listen(window, "storage", function (e) {
       var changedKey = e.key;
@@ -2741,6 +2955,7 @@ const createController = function (host) {
   var BLOCK_SEL = CFG.blocks ||
     "h1,h2,h3,h4,p,li,blockquote,pre,figure,.section-title,.section-deck,.hero-title,.pullquote,.fact-text";
   function eligibleBlock(node) {
+    if (integration && !safeTarget(node)) return null;
     while (node && node.nodeType === 1) {
       if (node.id && String(node.id).indexOf("__an") === 0) return null;
       if (node.closest && (node.closest("#__an_bar") || node.closest("#__an_panel") || node.closest("#__an_compose"))) return null;
@@ -2753,6 +2968,7 @@ const createController = function (host) {
     return null;
   }
   function setupBlockPlus() {
+    if (integration) return;
     plusBtn = el("div", { id: "__an_plus", title: "Comment on this section",
       html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>' });
     ensureHost().appendChild(plusBtn);
@@ -2833,6 +3049,7 @@ const createController = function (host) {
     plusBtn.classList.add("an-show");
   }
   function hidePlus(now) {
+    if (integration) return;
     clearTimeout(plusHideTimer);
     if (now) { plusBtn.classList.remove("an-show"); plusTarget = null; return; }
     plusHideTimer = setTimeout(function () { plusBtn.classList.remove("an-show"); plusTarget = null; }, 600);
@@ -2870,15 +3087,22 @@ const createController = function (host) {
 
   function setTool(t) {
     if (isReadOnly()) t = "cursor";
+    if (integration) { cancelDrawing(); clearTarget(); if (t !== 'cursor') closePanel(); }
     state.tool = t;
     bar.querySelectorAll(".an-btn[data-tool]").forEach(function (b) {
       b.classList.toggle("an-on", b.getAttribute("data-tool") === t);
     });
     var drawingTool = t === "rect" || t === "circle" || t === "pen" || t === "pin";
-    document.body.classList.toggle("an-drawing", drawingTool);
+    document.body.classList.toggle("an-drawing", integration ? t === 'rect' || t === 'circle' || t === 'pen' : drawingTool);
+    if (integration) {
+      document.body.classList.toggle('an-review-selecting', t === 'pin');
+      document.body.classList.toggle('an-review-browse', t === 'cursor');
+      var title = bar.querySelector('[data-tool="pin"]'); if (title) title.setAttribute('aria-label', 'Mark this page');
+      var browse = bar.querySelector('[data-tool="cursor"]'); if (browse) browse.setAttribute('aria-label', 'Browse page');
+    }
     var hints = { highlight: "Select any text to highlight & comment",
       rect: "Drag to draw a rectangle", circle: "Drag to draw a circle",
-      pen: "Draw freehand — release to comment", pin: "Click anywhere to drop a pin" };
+      pen: "Draw freehand — release to comment", pin: "Tap or focus a target, then confirm. Swipe to scroll." };
     if (hints[t]) showHint(hints[t]); else hideHint();
   }
   function showHint(txt) {
@@ -2898,7 +3122,7 @@ const createController = function (host) {
     if (root) root.classList.add("an-popen");
     renderNote();
     renderPanel();
-    setupPanelSwipe();
+    if (!integration) setupPanelSwipe();
   }
   function closePanel() {
     state.panelOpen = false;
@@ -2961,8 +3185,8 @@ const createController = function (host) {
   // are captured by comment id and restored on the rebuilt cards.
   var preservingDrafts = false;
   function captureDrafts() {
-    var drafts = {};
-    if (!preservingDrafts || !listEl) return drafts;
+    var drafts = integration ? JSON.parse(store.get('thread-drafts') || '{}') : {};
+    if ((!preservingDrafts && !integration) || !listEl) return drafts;
     Array.prototype.forEach.call(listEl.querySelectorAll(".an-card"), function (card) {
       var entry = {}, keep = false;
       [["reply", ".an-replybox"], ["edit", ".an-editbox"]].forEach(function (pair) {
@@ -2974,7 +3198,14 @@ const createController = function (host) {
       });
       if (keep) drafts[card.getAttribute("data-id")] = entry;
     });
+    if (integration) store.set('thread-drafts', JSON.stringify(drafts));
     return drafts;
+  }
+  function clearThreadDraft(id, kind) {
+    if (!integration) return;
+    var drafts = JSON.parse(store.get('thread-drafts') || '{}');
+    if (drafts[id]) delete drafts[id][kind];
+    store.set('thread-drafts', JSON.stringify(drafts));
   }
   function restoreDraft(entry, box, ta) {
     if (!entry) return;
@@ -2989,7 +3220,10 @@ const createController = function (host) {
     preservingDrafts = true;
     try { loadData(); } finally { preservingDrafts = false; }
   }
+  var threadCleanups = [];
+  function cleanThreads() { threadCleanups.splice(0).forEach(function (fn) { try { fn(); } catch (e) {} }); }
   function renderPanel() {
+    cleanThreads();
     if (!listEl) return;
     var drafts = captureDrafts();
     listEl.innerHTML = "";
@@ -3024,6 +3258,20 @@ const createController = function (host) {
         el("span", { class: "an-when", text: fmtTime(c.createdAt) }),
       ]);
       card.appendChild(meta);
+      if (integration) {
+        var context = c.originalContext;
+        var unavailable = c.__anchorMissing || c.__unanchored;
+        if (unavailable) card.appendChild(el('p', { class: 'an-context', role: 'status', text: 'Anchor unavailable. The original target is missing, hidden, private, ambiguous or from an earlier layout.' }));
+        if (context) {
+          var original = el('details', { class: 'an-context an-original-context' });
+          original.appendChild(el('summary', { text: 'Original target: ' + context.componentLabel + ' (' + context.viewport.vw + ' × ' + context.viewport.vh + ')' }));
+          original.appendChild(el('p', { text: 'Original description: ' + context.description }));
+          listen(original, 'click', function (e) { e.stopPropagation(); });
+          card.appendChild(original);
+        }
+        if (c.type === 'pen') card.appendChild(el('p', { class: 'an-context', text: 'Original description only. No snapshot was saved.' }));
+        decorateConflict(c, card);
+      }
       if (unread[c.id]) {
         card.classList.add("an-unread");
         card.appendChild(el("button", { class: "an-newpill", title: "Mark as seen", text: "Updated · mark as seen", onclick: function (e) {
@@ -3068,8 +3316,9 @@ const createController = function (host) {
       }
 
       var rbox = el("div", { class: "an-replybox" });
-      var rin = el("textarea", { class: "an-ta", rows: "2", placeholder: "Reply… (Ctrl+↵ to post)" });
+      var rin = el("textarea", { class: "an-ta", rows: "2", "aria-label": "Reply text", placeholder: "Reply… (Ctrl+↵ to post)" });
       rbox.appendChild(rin);
+      if (integration) listen(rin, 'input', captureDrafts);
       var rsend = el("button", { class: "an-primary", style: "margin-top:6px;align-self:flex-end", text: "Reply" });
       rbox.appendChild(rsend);
       function submitReply() {
@@ -3085,7 +3334,7 @@ const createController = function (host) {
           toast("This thread has reached its reply limit.", { kind: "error" });
           return;
         }
-        rin.value = ""; mergeComment(updated); renderPanel();
+        rin.value = ''; rbox.classList.remove('an-show'); clearThreadDraft(c.id, 'reply'); mergeComment(updated); renderPanel();
       }
       listen(rsend, "click", function (e) { e.stopPropagation(); submitReply(); });
       listen(rin, "keydown", function (e) {
@@ -3095,9 +3344,10 @@ const createController = function (host) {
       card.appendChild(rbox);
 
       var ebox = el("div", { class: "an-editbox" });
-      var eta = el("textarea", { class: "an-ta", rows: "2" });
+      var eta = el("textarea", { class: "an-ta", rows: "2", "aria-label": "Edit comment" });
       var esave = el("button", { class: "an-primary", text: "Save" });
       ebox.appendChild(eta);
+      if (integration) listen(eta, 'input', captureDrafts);
       ebox.appendChild(el("div", { style: "display:flex;justify-content:flex-end" }, [esave]));
       listen(eta, "keydown", function (e) {
         e.stopPropagation();
@@ -3106,7 +3356,7 @@ const createController = function (host) {
       listen(esave, "click", function (e) {
         e.stopPropagation();
         var updated = patchComment(c.id, { text: eta.value.trim() });
-        if (updated) { mergeComment(updated); renderPanel(); }
+        if (updated) { ebox.classList.remove('an-show'); clearThreadDraft(c.id, 'edit'); mergeComment(updated); renderPanel(); }
       });
       card.appendChild(ebox);
 
@@ -3145,6 +3395,10 @@ const createController = function (host) {
       ]);
       card.appendChild(act);
       card.appendChild(hbox);
+      if (integration && typeof integration.decorateThread === 'function') {
+        var cleanup = integration.decorateThread(serialize(c), card);
+        if (typeof cleanup === 'function') threadCleanups.push(cleanup);
+      }
 
       listen(card, "click", function () { focusComment(c.id, false); });
       listEl.appendChild(card);
@@ -3384,7 +3638,7 @@ const createController = function (host) {
     if (g.kind === "rect" || g.kind === "circle")
       return isFiniteNum(g.x) && isFiniteNum(g.y) && isFiniteNum(g.w) && isFiniteNum(g.h);
     if (g.kind === "pen")
-      return Array.isArray(g.points) && g.points.length >= 2 && g.points.length <= 10000 &&
+      return Array.isArray(g.points) && g.points.length >= 2 && g.points.length <= (integration ? 2000 : 10000) &&
         g.points.every(function (p) { return Array.isArray(p) && p.length === 2 && isFiniteNum(p[0]) && isFiniteNum(p[1]); });
     if (g.kind === "block") return typeof g.selector === "string" && g.selector.trim().length > 0 && g.selector.length < 4096;
     return false; // unknown geometry kinds are rejected, not guessed at
@@ -3718,7 +3972,7 @@ const createController = function (host) {
         var m = document.querySelector('[data-an="' + id + '"]');
         if (m) targetY = m.getBoundingClientRect().top + window.scrollY - 120;
       } else if (c.geom) {
-        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;
+        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : (integration ? null : document.body);
         if (ae) {
           var box = docBox(ae);
           var fy = c.geom.y != null ? c.geom.y : (c.geom.points ? c.geom.points[0][1] : 0.2);
@@ -3779,7 +4033,7 @@ const createController = function (host) {
     contentTimer = contentMaxTimer = 0;
     if (!state.enabled || destroyed) return;
     if (drawing || pendingDraft) { scheduleContent(); return; }
-    ensureHost(); renderAll();
+    ensureHost(); renderAll(); if (integration) renderPanel();
   }
   function scheduleContent() {
     clearTimeout(contentTimer);
@@ -3803,7 +4057,7 @@ const createController = function (host) {
     if (!contentObserver) return;
     contentObserver.disconnect();
     if (state.enabled) contentObserver.observe(document.documentElement, { subtree: true, childList: true,
-      characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open"] });
+      characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open", "data-review-id", "data-review-private", "data-review-exclude", "contenteditable"] });
     else {
       clearTimeout(contentTimer); clearTimeout(contentMaxTimer); contentTimer = contentMaxTimer = 0;
       // While collapsed only recover removed UI; do not resolve content or
@@ -3834,6 +4088,7 @@ const createController = function (host) {
     booted = true;
     captureInvite();
     buildUI();
+    if (integration) JSON.parse(store.get('deleted-drafts') || '[]').forEach(showDeletedDraft);
     ensureOverlay();
     setupBlockPlus();
     watchNavigation();
@@ -3882,6 +4137,7 @@ const createController = function (host) {
     syncState: function () { return syncState(); },
     destroy: function () {
       if (destroyed) return;
+      if (integration) { saveComposerDraft(); captureDrafts(); cleanThreads(); if (typeof integration.teardown === 'function') integration.teardown(); }
       destroyed = true;
       if (contentObserver) contentObserver.disconnect();
       if (_anchorRO) _anchorRO.disconnect();
@@ -3891,7 +4147,7 @@ const createController = function (host) {
       if (postController) postController.abort();
       stopSync();
       objectUrls.forEach(function (url) { URL.revokeObjectURL(url); }); objectUrls.clear();
-      document.body && document.body.classList.remove("an-drawing", "an-highlighting");
+      document.body && document.body.classList.remove("an-drawing", "an-highlighting", "an-review-selecting", "an-review-browse");
       if (uiHost) uiHost.remove();
       var style = document.getElementById("__an_style"); if (style) style.remove();
     },

@@ -84,6 +84,200 @@ patch('      el("button", { class: "an-hbtn", html: ICONS.download, title: "Down
   '      integration ? null : el("button", { class: "an-hbtn", html: ICONS.download, title: "Download comments as JSON",');
 patch('    if (REMOTE) footEl.appendChild(el("div", { class: "an-exportlbl", text: "Keep a copy" }));',
   '    if (integration) return;\n    if (REMOTE) footEl.appendChild(el("div", { class: "an-exportlbl", text: "Keep a copy" }));');
+// Renderer behavior stays here, applied to the pinned source with fail-closed anchors.
+function replaceSection(start, end, replacement) {
+  const a = code.indexOf(start), b = code.indexOf(end, a + start.length);
+  if (a < 0 || b < 0 || code.indexOf(start, a + 1) >= 0) throw new Error('Renderer section drift: ' + start);
+  patch(code.slice(a, b), replacement);
+}
+patch('  function cssPath(node) {', `  var PRIVATE_TARGET = '[data-review-private],[data-review-exclude],form,input,textarea,select,option,[contenteditable]:not([contenteditable="false"])';
+  function privateTarget(node) {
+    var n = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !n || !!n.closest(PRIVATE_TARGET);
+  }
+  function safeTarget(node) {
+    return node && !isOurs(node) && !privateTarget(node) && !node.querySelector(PRIVATE_TARGET);
+  }
+  function privateRange(range) {
+    if (privateTarget(range.startContainer) || privateTarget(range.endContainer)) return true;
+    return Array.prototype.some.call(document.querySelectorAll(PRIVATE_TARGET), function (n) {
+      return !isOurs(n) && range.intersectsNode(n);
+    });
+  }
+  function componentLabel(node) {
+    return String(node && (node.getAttribute('data-review-label') || node.getAttribute('aria-label') || node.getAttribute('data-review-id') || node.nodeName.toLowerCase()) || 'Page note').trim().slice(0, 200) || 'Page note';
+  }
+  function originalContext(draft) {
+    var node = draft.geom && resolveAnchorEl(draft.geom.selector);
+    return { componentLabel: draft.componentLabel || componentLabel(node), description: draft.text,
+      viewport: { vw: window.innerWidth, vh: window.innerHeight }, snapshotAttachmentId: null };
+  }
+  function normalizeOriginalContext(c) {
+    if (!c || typeof c.componentLabel !== 'string' || !c.componentLabel.trim() || c.componentLabel.length > 200 ||
+        typeof c.description !== 'string' || !c.description.trim() || c.description.length > 5000 ||
+        !c.viewport || !(c.viewport.vw > 0) || !(c.viewport.vh > 0)) return null;
+    return { componentLabel: c.componentLabel, description: c.description,
+      viewport: { vw: c.viewport.vw, vh: c.viewport.vh }, snapshotAttachmentId: c.snapshotAttachmentId || null };
+  }
+  function cssPath(node) {
+    if (integration) {
+      if (!safeTarget(node)) return null;
+      var stable = node.getAttribute('data-review-id');
+      if (stable) {
+        var selector = '[data-review-id="' + CSS.escape(stable) + '"]';
+        return document.querySelectorAll(selector).length === 1 ? selector : null;
+      }
+    }`);
+replaceSection('  function resolveAnchorEl(selector) {', '\n  // Trap Tab focus', `  function resolveAnchorEl(selector) {
+    try {
+      var nodes = document.querySelectorAll(selector);
+      return nodes.length === 1 && (!integration || safeTarget(nodes[0])) ? nodes[0] : null;
+    } catch (e) { return null; }
+  }
+`);
+patch('      geom: normalizeGeom(c.geom),', '      geom: normalizeGeom(c.geom),\n      originalContext: normalizeOriginalContext(c.originalContext),');
+patch('      url: location.href,\n      type: draft.type', '      url: integration ? location.origin + location.pathname : location.href,\n      type: draft.type');
+patch('      geom: draft.geom || null,', '      geom: draft.geom || null,\n      originalContext: integration ? originalContext(draft) : null,');
+patch('    if (isReadOnly()) { toast("This review is read only."); return null; }', `    if (isReadOnly()) { toast("This review is read only."); return null; }
+    if (integration && (!String(draft.text || '').trim() || String(draft.text).length > MAX_COMMENT_TEXT)) {
+      toast('Write a description of 1 to 5,000 characters before sharing.', { kind: 'error' }); return null;
+    }
+    if (integration && draft.anchor && (!rangeFromQuote(draft.anchor) || resolveHighlightAnchor(draft.anchor).status !== 'ok')) {
+      toast('The selected text is private, ambiguous or unavailable. Select public text again.', { kind: 'error' }); return null;
+    }
+    if (integration && draft.geom && (!resolveAnchorEl(draft.geom.selector) || (draft.geom.points && draft.geom.points.length > 2000))) {
+      toast('This target is private, ambiguous or unavailable, or the drawing is too long. Choose another target.', { kind: 'error' }); return null;
+    }`);
+patch('  function patchComment(id, changes) {', `  function patchComment(id, changes) {
+    if (integration) {
+      var words = changes.reply ? changes.reply.text : changes.editReply ? changes.editReply.text : changes.text;
+      if (words !== undefined && (typeof words !== 'string' || !words.trim() || words.length > 5000)) {
+        toast('Use 1 to 5,000 characters. Your draft is kept.', { kind: 'error' }); return null;
+      }
+    }`);
+patch('        if (isOurs(n.parentNode)) return NodeFilter.FILTER_REJECT;', '        if (isOurs(n.parentNode) || integration && privateTarget(n)) return NodeFilter.FILTER_REJECT;');
+patch('  function quoteFromRange(range) {', '  function quoteFromRange(range) {\n    if (integration && privateRange(range)) return null;');
+patch('    return r;\n  }\n  function locate(map, globalOff)', '    return integration && privateRange(r) ? null : r;\n  }\n  function locate(map, globalOff)');
+patch('  function paintRange(range, color, id) {', '  function paintRange(range, color, id) {\n    if (integration && privateRange(range)) return [];');
+patch('  function renderMissingAnchor(c, missingSlot) {', '  function renderMissingAnchor(c, missingSlot) {\n    if (integration) return;');
+patch('  function unanchoredPill(c, slot) {', '  function unanchoredPill(c, slot) {\n    if (integration) return;');
+patch('    if (!anchorVisible(anchorEl)) return;\n    var box = docBox(anchorEl);\n    rememberAnchor(c, box);\n    var g = c.geom;', `    if (!anchorVisible(anchorEl) || integration && viewportMismatch(c.geom)) { c.__anchorMissing = true; return; }
+    var box = docBox(anchorEl);
+    rememberAnchor(c, box);
+    var g = c.geom;`);
+patch('    if (!anchorEl && c.geom.selector !== "body")', '    if ((!anchorEl || integration && !anchorVisible(anchorEl)) && (integration || c.geom.selector !== "body"))');
+patch('    if (!anchorVisible(anchorEl)) return;\n    var box = docBox(anchorEl);\n    rememberAnchor(c, box);\n    var idx = state.comments.indexOf(c) + 1;\n    var tab', '    if (!anchorVisible(anchorEl)) { c.__anchorMissing = true; return; }\n    c.__anchorMissing = false;\n    var box = docBox(anchorEl);\n    rememberAnchor(c, box);\n    var idx = state.comments.indexOf(c) + 1;\n    var tab');
+patch('        if (r) {\n          var marks = paintRange', '        if (!r) c.__unanchored = "unavailable";\n        if (r) {\n          var marks = paintRange');
+patch('      card.appendChild(meta);', `      card.appendChild(meta);
+      if (integration) {
+        var context = c.originalContext;
+        var unavailable = c.__anchorMissing || c.__unanchored;
+        if (unavailable) card.appendChild(el('p', { class: 'an-context', role: 'status', text: 'Anchor unavailable. The original target is missing, hidden, private, ambiguous or from an earlier layout.' }));
+        if (context) {
+          var original = el('details', { class: 'an-context an-original-context' });
+          original.appendChild(el('summary', { text: 'Original target: ' + context.componentLabel + ' (' + context.viewport.vw + ' × ' + context.viewport.vh + ')' }));
+          original.appendChild(el('p', { text: 'Original description: ' + context.description }));
+          listen(original, 'click', function (e) { e.stopPropagation(); });
+          card.appendChild(original);
+        }
+        if (c.type === 'pen') card.appendChild(el('p', { class: 'an-context', text: 'Original description only. No snapshot was saved.' }));
+        decorateConflict(c, card);
+      }`);
+patch('      card.appendChild(hbox);', `      card.appendChild(hbox);
+      if (integration && typeof integration.decorateThread === 'function') {
+        var cleanup = integration.decorateThread(serialize(c), card);
+        if (typeof cleanup === 'function') threadCleanups.push(cleanup);
+      }`);
+patch('  function renderPanel() {', `  var threadCleanups = [];
+  function cleanThreads() { threadCleanups.splice(0).forEach(function (fn) { try { fn(); } catch (e) {} }); }
+  function renderPanel() {
+    cleanThreads();`);
+patch('      destroyed = true;', `      if (integration) { saveComposerDraft(); cleanThreads(); if (typeof integration.teardown === 'function') integration.teardown(); }
+      destroyed = true;`);
+patch('      characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open"]', '      characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open", "data-review-id", "data-review-private", "data-review-exclude", "contenteditable"]');
+// Layout refresh must update the thread explanation as well as the overlay.
+patch('    ensureHost(); renderAll();', '    ensureHost(); renderAll(); if (integration) renderPanel();');
+patch('rt = setTimeout(renderAll, 150);', 'rt = setTimeout(function () { renderAll(); if (integration) renderPanel(); }, 150);');
+// Full key isolation is supplied by the adapter. Each local value has a fixed TTL.
+patch('return window.localStorage.getItem(integration ? integration.storageNamespace + ":" + k : k);', `var raw = window.localStorage.getItem(integration ? integration.storageNamespace + ':' + k : k);
+      if (!integration || raw === null) return raw;
+      var saved; try { saved = JSON.parse(raw); } catch (e) {}
+      if (!saved || saved.reviewDraft !== 1 || Date.now() > saved.expiresAt) { expiryNotice(); return null; }
+      return saved.value;`);
+patch('window.localStorage.setItem(integration ? integration.storageNamespace + ":" + k : k, v);', `window.localStorage.setItem(integration ? integration.storageNamespace + ':' + k : k,
+        integration ? JSON.stringify({ reviewDraft: 1, expiresAt: Date.now() + 7 * 86400000, value: v }) : v);`);
+patch('  var UNSAVED_MSG =', `  var expiryShown = false;
+  function expiryNotice() {
+    if (expiryShown) return; expiryShown = true;
+    setTimeout(function () { ensureHost().appendChild(el('p', { id: '__an_expiry', role: 'alert', text: 'A saved draft expired after seven days or has an older format. It will not be shared. Start a new comment.' })); }, 0);
+  }
+  var UNSAVED_MSG =`);
+patch('    op.key = idemKey();', '    op.key = idemKey(); if (integration) op.createdAt = Date.now();');
+patch('key: idemKey(), nb: Date.now() + (holdMs || 0)', 'key: idemKey(), createdAt: Date.now(), nb: Date.now() + (holdMs || 0)');
+patch('      return o && OP_TYPES[o.t] === 1', `      if (integration && o && (!o.createdAt || Date.now() - o.createdAt > 7 * 86400000)) { expiryNotice(); return false; }
+      return o && OP_TYPES[o.t] === 1`);
+// A held operation persists through reload, refresh, submit and edits.
+patch('    sync.held = false;\n    return new Promise', `    if (integration && (sync.held || readQueue().some(function (o) { return o.held; }))) return Promise.reject(new Error('Compare the saved draft before retrying.'));
+    sync.held = false;
+    return new Promise`);
+patch('    if (!REMOTE || destroyed || sync.inflight || sync.held) return;', '    if (!REMOTE || destroyed || sync.inflight || sync.held || integration && readQueue().some(function (o) { return o.held; })) return;');
+patch('    var s = sync.conflict ?', '    if (integration && readQueue().some(function (o) { return o.held; })) sync.held = true;\n    var s = sync.conflict ?');
+patch('      sync.held = true; sync.conflict = true; syncChanged();', `      markOp(op, { held: true, conflict: true });
+      sync.held = true; sync.conflict = true; syncChanged();
+      renderPanel();`);
+patch('      sync.held = true; syncChanged();\n      settleWaiters(new Error("Could not share this change. Your draft is kept here."));', `      markOp(op, { held: true });
+      sync.held = true; syncChanged(); renderPanel();
+      settleWaiters(new Error("Could not share this change. Your draft is kept here."));`);
+// Polling may observe newer stamps, but cannot change the base of a queued write.
+patch('      stamps[c.id] = w.updatedAt;', '      if (!integration || !pending[c.id]) stamps[c.id] = w.updatedAt;');
+patch('  function flushAll() {', `  function decorateConflict(c, card) {
+    var held = readQueue().filter(function (o) { return o.id === c.id && o.held; });
+    if (!held.length) return;
+    var box = el('section', { class: 'an-conflict', 'aria-label': 'Compare saved draft' });
+    box.appendChild(el('p', { text: 'Could not share. Your local draft is kept. Reload the current shared version to compare before deciding.' }));
+    var local = el('p', { text: 'Your draft: ' + c.text + (c.replies.length ? ' Replies: ' + c.replies.map(function (r) { return r.text; }).join('; ') : '') });
+    box.appendChild(local);
+    var reload = el('button', { class: 'an-ghost', text: 'Compare / reload shared version' });
+    box.appendChild(reload);
+    listen(reload, 'click', function (e) {
+      e.stopPropagation(); reload.disabled = true;
+      apiFetch('GET', '/comments?page=' + encodeURIComponent(wirePage(PAGE))).then(function (r) {
+        reload.disabled = false;
+        if (!r.res.ok || !r.data || !Array.isArray(r.data.comments)) { toast('Could not load the current version. Your draft is kept.'); return; }
+        var current = r.data.comments.find(function (w) { return w.id === c.id; });
+        box.querySelectorAll('.an-current,.an-decision').forEach(function (n) { n.remove(); });
+        box.appendChild(el('p', { class: 'an-current', text: current ? 'Current shared text: ' + current.text + ' Replies: ' + current.replies.map(function (v) { return v.text; }).join('; ') : 'This comment is no longer available on the server.' }));
+        var discard = el('button', { class: 'an-ghost an-decision', text: 'Discard my local change' });
+        box.appendChild(discard);
+        listen(discard, 'click', function (ev) {
+          ev.stopPropagation(); dropOps(function (o) { return o.id === c.id; });
+          if (current) applyServer(current, null); else forgetRecord(c.id);
+          releaseHold(); loadData();
+        });
+        if (current) {
+          var retry = el('button', { class: 'an-primary an-decision', text: 'Retry my change against this version' });
+          box.appendChild(retry);
+          listen(retry, 'click', function (ev) {
+            ev.stopPropagation(); var d = dbRead(); serverStamps(d)[c.id] = current.updatedAt; dbWrite(d);
+            writeQueue(readQueue().map(function (o) { return o.id === c.id ? Object.assign({}, o, { held: false, conflict: false, key: idemKey() }) : o; }));
+            releaseHold(); scheduleFlush(0); renderPanel();
+          });
+        }
+      }, function () { reload.disabled = false; toast('Could not load the current version. Your draft is kept.'); });
+    });
+    card.appendChild(box);
+  }
+  function releaseHold() {
+    sync.held = readQueue().some(function (o) { return o.held; });
+    sync.conflict = readQueue().some(function (o) { return o.conflict; }); syncChanged();
+  }
+  function flushAll() {`);
+// Tombstones are also cached locally to prevent stale reads restoring a deleted mark.
+patch('  function forgetRecord(id) {', `  function forgetRecord(id) {
+    if (integration) { var tombs = JSON.parse(store.get('tombstones') || '{}'); tombs[id] = true; store.set('tombstones', JSON.stringify(tombs)); }`);
+patch('  function fromWire(w) {', `  function fromWire(w) {
+    if (integration && JSON.parse(store.get('tombstones') || '{}')[w && w.id]) return null;`);
+
 const integrationStyles = readFileSync(path.join(root, 'src/review/integration.css'), 'utf8');
 patch('  var ICONS = {', `  if (integration) CSS_TEXT += ${JSON.stringify(integrationStyles)};\n  var ICONS = {`);
 patch('  function setTool(t) {', '  function setTool(t) {\n    if (isReadOnly()) t = "cursor";');
@@ -106,6 +300,219 @@ patch('    import: function () { pickImportFile(); },',
   '    import: function () { if (!integration) pickImportFile(); },');
 patch('      if (REMOTE) { sync.held = false; sync.etag = "";',
   '      if (REMOTE) { if (!integration) sync.held = false; sync.etag = "";');
+// Target selection is a tap-up operation. Pointerdown never turns a swipe into a pin.
+replaceSection('  function onDown(e) {', '  function onMove(e) {', `  var tapStart = null, targetChoice = null, targetBox = null, targetOutline = null, focusBeforeDraft = null;
+  function cancelDrawing() {
+    if (drawing && drawing.node && drawing.node.parentNode) drawing.node.remove();
+    drawing = null; tapStart = null; clearTemp();
+  }
+  function clearTarget() {
+    targetChoice = null;
+    if (targetBox) targetBox.remove(); if (targetOutline) targetOutline.remove();
+    targetBox = targetOutline = null;
+  }
+  function positionTarget() {
+    if (!targetChoice || !targetOutline) return;
+    var r = targetChoice.getBoundingClientRect();
+    Object.assign(targetOutline.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  }
+  function chooseTarget(node) {
+    if (!safeTarget(node) || !cssPath(node) || !anchorVisible(node)) { toast('This target is private, ambiguous or unavailable. Choose another element.'); return; }
+    clearTarget(); targetChoice = node; focusBeforeDraft = node;
+    targetOutline = el('div', { id: '__an_targetoutline', 'aria-hidden': 'true' });
+    targetBox = el('section', { id: '__an_target', role: 'dialog', 'aria-label': 'Confirm review target' });
+    targetBox.appendChild(el('strong', { text: 'Target: ' + componentLabel(node) }));
+    function button(text, action, disabled) { var b = el('button', { class: 'an-ghost', text: text }); b.disabled = !!disabled; listen(b, 'click', action); targetBox.appendChild(b); return b; }
+    button('Parent element', function () { chooseTarget(node.parentElement); }, !safeTarget(node.parentElement));
+    var children = Array.prototype.filter.call(node.children, function (n) { return safeTarget(n) && anchorVisible(n); });
+    children.forEach(function (child) { button('Child: ' + componentLabel(child), function () { chooseTarget(child); }); });
+    var confirm = button('Use this target', function () {
+      if (!cssPath(node) || !safeTarget(node)) { clearTarget(); return; }
+      var label = componentLabel(node), geom = { kind: 'pin', selector: cssPath(node), x: 0.5, y: 0.5, vw: window.innerWidth, vh: window.innerHeight };
+      clearTarget(); openComposer(20, 100, { type: 'pin', color: state.color, componentLabel: label, geom: geom });
+    });
+    button('Cancel marking', function () { clearTarget(); setTool('cursor'); if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true }); });
+    ensureHost().appendChild(targetOutline); ensureHost().appendChild(targetBox); positionTarget(); confirm.focus({ preventScroll: true });
+  }
+  listen(window, 'scroll', positionTarget, true); listen(window, 'resize', positionTarget);
+  listen(document, 'pointercancel', function () { if (integration) { var wasDrawing = !!drawing; cancelDrawing(); if (wasDrawing) { clearTarget(); setTool('cursor'); } } }, true);
+  listen(document, 'pointerup', function (e) {
+    if (!integration || !tapStart) return;
+    var start = tapStart; tapStart = null;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) <= 10 && Math.abs(window.scrollY - start.scrollY) <= 5) chooseTarget(start.node);
+  }, true);
+  listen(document, 'keydown', function (e) {
+    if (!integration || !state.enabled) return;
+    if (e.key === 'Escape') { cancelDrawing(); clearTarget(); if (pendingDraft) cancelDraft(); setTool('cursor'); return; }
+    if (state.tool === 'pin' && !isOurs(e.target) && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); e.stopImmediatePropagation(); chooseTarget(e.target);
+    }
+  }, true);
+  function onDown(e) {
+    if (isReadOnly() || !state.enabled || isOurs(e.target)) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    var t = state.tool;
+    if (integration && t === 'pin') {
+      tapStart = { node: e.target, x: e.clientX, y: e.clientY, scrollY: window.scrollY }; return;
+    }
+    if (t === 'pin') { chooseTarget(e.target); return; }
+    if (t === 'rect' || t === 'circle' || t === 'pen') {
+      var anchor = integration ? e.target : pickAnchor(e.target);
+      if (integration && (!safeTarget(anchor) || !cssPath(anchor))) { toast('Choose a public, unique component to draw on.'); return; }
+      e.preventDefault(); e.stopPropagation(); ensureOverlay();
+      drawing = { tool: t, anchorEl: anchor, box: docBox(anchor), startX: e.pageX, startY: e.pageY, points: [[e.pageX, e.pageY]], node: null };
+      if (e.pointerId != null && overlay && overlay.setPointerCapture) try { overlay.setPointerCapture(e.pointerId); } catch (ex) {}
+    }
+  }
+`);
+patch('    e.preventDefault();\n    var d = drawing;', `    e.preventDefault();
+    if (integration && drawing.points.length >= 2000) { cancelDrawing(); setTool('cursor'); toast('Drawing is too long. Use fewer than 2,000 points.', { kind: 'error' }); return; }
+    var d = drawing;`);
+patch('    if (isReadOnly()) t = "cursor";', `    if (isReadOnly()) t = "cursor";
+    if (integration) { cancelDrawing(); clearTarget(); if (t !== 'cursor') closePanel(); }`);
+patch('    document.body.classList.toggle("an-drawing", drawingTool);', `    document.body.classList.toggle("an-drawing", integration ? t === 'rect' || t === 'circle' || t === 'pen' : drawingTool);
+    if (integration) {
+      document.body.classList.toggle('an-review-selecting', t === 'pin');
+      document.body.classList.toggle('an-review-browse', t === 'cursor');
+      var title = bar.querySelector('[data-tool="pin"]'); if (title) title.setAttribute('aria-label', 'Mark this page');
+      var browse = bar.querySelector('[data-tool="cursor"]'); if (browse) browse.setAttribute('aria-label', 'Browse page');
+    }`);
+patch('pin: "Click anywhere to drop a pin"', 'pin: "Tap or focus a target, then confirm. Swipe to scroll."');
+patch('    if (!state.enabled) return;\n    if (drawing) return;', '    if (!state.enabled || integration && (state.tool !== "highlight" || isOurs(e.target))) return;\n    if (drawing) return;');
+patch('      if (isOurs(range.commonAncestorContainer)) return;', '      if (isOurs(range.commonAncestorContainer) || integration && privateRange(range)) return;');
+patch('  function ensureComposer() {', `  function saveComposerDraft() {
+    if (!integration || !pendingDraft || !composer) return;
+    var ta = composer.querySelector('textarea');
+    var saved = { draft: serialize(pendingDraft), text: ta ? ta.value : '', createdAt: pendingDraft.__draftStarted || Date.now() };
+    pendingDraft.__draftStarted = saved.createdAt;
+    store.set('composer', JSON.stringify(saved));
+  }
+  function resumeDraft() {
+    var raw = store.get('composer'); if (!raw) return;
+    var saved; try { saved = JSON.parse(raw); } catch (e) { return; }
+    if (!saved || !saved.draft || !saved.createdAt || Date.now() - saved.createdAt > 7 * 86400000) { expiryNotice(); return; }
+    saved.draft.__draftStarted = saved.createdAt;
+    openComposer(20, 100, saved.draft);
+    composer.querySelector('textarea').value = saved.text || '';
+  }
+  function composerViewport() {
+    if (!integration) return;
+    var v = window.visualViewport;
+    ensureHost().style.setProperty('--an-vh', (v ? v.height : window.innerHeight) + 'px');
+    ensureHost().style.setProperty('--an-vtop', (v ? v.offsetTop : 0) + 'px');
+  }
+  if (integration) {
+    listen(window, 'resize', composerViewport);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', composerViewport);
+      window.visualViewport.addEventListener('scroll', composerViewport);
+      cleanups.push(function () { window.visualViewport.removeEventListener('resize', composerViewport); window.visualViewport.removeEventListener('scroll', composerViewport); });
+    }
+    listen(window, 'pagehide', saveComposerDraft);
+    listen(document, 'visibilitychange', function () { if (document.hidden) saveComposerDraft(); });
+  }
+  function ensureComposer() {`);
+patch('    composer = el("div", { id: "__an_compose" });', '    composer = el("div", { id: "__an_compose", role: "dialog", "aria-label": "Write review comment" });');
+patch('      if (performance.now() - composerShownAt < 120) return;', '      if (integration) return;\n      if (performance.now() - composerShownAt < 120) return;');
+patch('    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…" });', `    var ta = el("textarea", { class: "an-ta", rows: "3", placeholder: "Write your review…", 'aria-label': 'Review description' });
+    if (integration) { ta.value = draft.text || ''; listen(ta, 'input', saveComposerDraft); }
+    if (integration) composer.appendChild(el('p', { class: 'an-context', text: 'Target: ' + (draft.componentLabel || componentLabel(draft.geom && resolveAnchorEl(draft.geom.selector))) + (draft.type === 'pen' ? '. A description is required. Original description only; no snapshot is available.' : '') }));`);
+patch('      cancel, save,', `      integration ? el('button', { class: 'an-ghost', text: 'Close and keep draft', onclick: function () { saveComposerDraft(); composer.classList.remove('an-show'); setTool('cursor'); } }) : null,
+      cancel, save,`);
+patch('    composer.classList.add("an-show");', `    composer.classList.add("an-show");
+    if (integration) { closePanel(); composerViewport(); saveComposerDraft(); }`);
+patch('  function cancelDraft() {', `  function cancelDraft() {
+    if (integration) { store.set('composer', 'null'); clearTarget(); cancelDrawing(); }
+    if (focusBeforeDraft && focusBeforeDraft.focus) focusBeforeDraft.focus({ preventScroll: true });`);
+patch('    if (!c) return;\n    composer.classList.remove("an-show");', `    if (!c) return;
+    if (integration) store.set('composer', 'null');
+    composer.classList.remove("an-show");`);
+patch('    setupPanelSwipe();', '    if (!integration) setupPanelSwipe();');
+patch('      el("h2", { text: "Comments" }),', `      el("h2", { text: "Comments" }),
+      integration ? el('button', { class: 'an-ghost', text: 'Mark this page', onclick: function () { setTool('pin'); } }) : null,
+      integration ? el('button', { class: 'an-ghost', text: 'Resume draft', onclick: resumeDraft }) : null,`);
+patch('var ch = el("span", { class: "an-chip"', 'var ch = el("button", { type: "button", class: "an-chip"');
+patch('    var searchInput = el("input", { placeholder: "Search comments…" });', '    var searchInput = el("input", { placeholder: "Search comments…", "aria-label": "Search comments" });');
+patch('      var rin = el("textarea", { class: "an-ta", rows: "2", placeholder: "Reply… (Ctrl+↵ to post)" });', '      var rin = el("textarea", { class: "an-ta", rows: "2", "aria-label": "Reply text", placeholder: "Reply… (Ctrl+↵ to post)" });');
+patch('      var eta = el("textarea", { class: "an-ta", rows: "2" });', '      var eta = el("textarea", { class: "an-ta", rows: "2", "aria-label": "Edit comment" });');
+patch('      document.body && document.body.classList.remove("an-drawing", "an-highlighting");', '      document.body && document.body.classList.remove("an-drawing", "an-highlighting", "an-review-selecting", "an-review-browse");');
+
+patch('  function eligibleBlock(node) {', '  function eligibleBlock(node) {\n    if (integration && !safeTarget(node)) return null;');
+// No hover/long-press capture in Browse mode. The explicit target tool covers sections.
+patch('  function setupBlockPlus() {', '  function setupBlockPlus() {\n    if (integration) return;');
+patch('    if (!plusTarget) return false;', '    if (!plusTarget) return false;');
+patch('  function hidePlus(now) {', '  function hidePlus(now) {\n    if (integration) return;');
+patch('g.points.length <= 10000', 'g.points.length <= (integration ? 2000 : 10000)');
+patch('    var c = createComment(draft);', `    if (integration && draft.__draftStarted && Date.now() - draft.__draftStarted > 7 * 86400000) { expiryNotice(); return; }
+    var c = createComment(draft);`);
+patch('    if (status === 410) {', `    if (integration && status === 410 && op.t !== 'del') {
+      var lost = dbRead().comments.find(function (c) { return c.id === op.id; });
+      if (lost) { var deletedDrafts = JSON.parse(store.get('deleted-drafts') || '[]'); deletedDrafts.push(lost); store.set('deleted-drafts', JSON.stringify(deletedDrafts)); showDeletedDraft(lost); }
+    }
+    if (status === 410) {`);
+patch('  function decorateConflict(c, card) {', `  function showDeletedDraft(c) {
+    if (document.getElementById('__an_deleted_' + c.id)) return;
+    var box = el('section', { id: '__an_deleted_' + c.id, class: 'an-deleted-draft', role: 'alert' });
+    box.appendChild(el('p', { text: 'This thread was deleted. Your local draft will not be shared: ' + c.text + ' ' + c.replies.map(function (r) { return r.text; }).join('; ') }));
+    box.appendChild(el('button', { class: 'an-ghost', text: 'Discard deleted thread draft', onclick: function () { store.set('deleted-drafts', JSON.stringify(JSON.parse(store.get('deleted-drafts') || '[]').filter(function (d) { return d.id !== c.id; }))); box.remove(); } }));
+    ensureHost().appendChild(box);
+  }
+  function decorateConflict(c, card) {`);
+patch('        if (current) {\n          var retry', `        if (current || !serverStamps(dbRead())[c.id] && !held.some(function (o) { return o.conflict; })) {
+          var retry`);
+patch('serverStamps(d)[c.id] = current.updatedAt; dbWrite(d);', 'if (current) serverStamps(d)[c.id] = current.updatedAt; dbWrite(d);');
+patch('text: current ? \'Current shared text: \'', 'text: current ? \'Current shared text: \'');
+// Highlight fallback must still obey unique range resolution and private intersections.
+patch('        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;', '        var ae = c.geom.selector ? resolveAnchorEl(c.geom.selector) : (integration ? null : document.body);');
+
+patch('    return g && g.vw && Math.abs(g.vw - window.innerWidth) > 200;', '    return g && g.vw && (integration ? Math.abs(g.vw - window.innerWidth) > 1 || Math.abs(g.vh - window.innerHeight) > 1 : Math.abs(g.vw - window.innerWidth) > 200);');
+patch('  function sizeOverlay() {', `  function sizeOverlay() {
+    if (integration && overlay) { overlay.setAttribute('width', 0); overlay.setAttribute('height', 0); overlay.style.width = '0px'; overlay.style.height = '0px'; }`);
+// Persist the exact first-attempt PUT body. Later edits queue behind its receipt.
+patch('        if (q[i].t === "put" && !(sync.inflight && sync.inflight.key === q[i].key)) {', '        if (q[i].t === "put" && !(integration && q[i].payload) && !(sync.inflight && sync.inflight.key === q[i].key)) {');
+patch('    if (op.t !== "del" && (!rec || !isValidComment(rec) || rec.visibility === "private"))', '    if (op.t !== "del" && !(integration && op.t === "put" && op.payload) && (!rec || !isValidComment(rec) || rec.visibility === "private"))');
+patch('    if (op.t === "put") {\n      var body = serialize(normalizeComment(rec));', `    if (integration && op.t === 'put' && op.payload) return apiFetch('PUT', path, JSON.parse(op.payload), headers);
+    if (op.t === "put") {
+      var body = serialize(normalizeComment(rec));`);
+patch('      return apiFetch("PUT", path, body, headers);', `      if (integration) { op.payload = JSON.stringify(body); markOp(op, { payload: op.payload }); }
+      return apiFetch("PUT", path, body, headers);`);
+patch("{ held: false, conflict: false, key: idemKey() }", "{ held: false, conflict: false, payload: null, key: idemKey() }");
+patch('    if (integration) {\n      var words = changes.reply', `    if (integration) {
+      if (changes.editReply) { toast('Reply editing is unavailable. Your draft is kept.', { kind: 'error' }); return null; }
+      var words = changes.reply`);
+// Typed, unsent reply/edit drafts survive render, close, reload and actor teardown.
+patch('    var drafts = {};\n    if (!preservingDrafts || !listEl) return drafts;', `    var drafts = integration ? JSON.parse(store.get('thread-drafts') || '{}') : {};
+    if ((!preservingDrafts && !integration) || !listEl) return drafts;`);
+patch('    return drafts;\n  }\n  function restoreDraft', `    if (integration) store.set('thread-drafts', JSON.stringify(drafts));
+    return drafts;
+  }
+  function clearThreadDraft(id, kind) {
+    if (!integration) return;
+    var drafts = JSON.parse(store.get('thread-drafts') || '{}');
+    if (drafts[id]) delete drafts[id][kind];
+    store.set('thread-drafts', JSON.stringify(drafts));
+  }
+  function restoreDraft`);
+patch('      rbox.appendChild(rin);', `      rbox.appendChild(rin);
+      if (integration) listen(rin, 'input', captureDrafts);`);
+patch('      ebox.appendChild(eta);', `      ebox.appendChild(eta);
+      if (integration) listen(eta, 'input', captureDrafts);`);
+patch('        rin.value = ""; mergeComment(updated); renderPanel();', `        rin.value = ''; rbox.classList.remove('an-show'); clearThreadDraft(c.id, 'reply'); mergeComment(updated); renderPanel();`);
+patch('        if (updated) { mergeComment(updated); renderPanel(); }\n      });\n      card.appendChild(ebox);', `        if (updated) { ebox.classList.remove('an-show'); clearThreadDraft(c.id, 'edit'); mergeComment(updated); renderPanel(); }
+      });
+      card.appendChild(ebox);`);
+patch('if (integration) { saveComposerDraft(); cleanThreads();', 'if (integration) { saveComposerDraft(); captureDrafts(); cleanThreads();');
+patch('    setTool("cursor");\n    pendingDraft = null;', `    setTool("cursor");
+    if (integration && listEl) {
+      var savedCard = listEl.querySelector('[data-id="' + c.id + '"]');
+      if (savedCard) { savedCard.setAttribute('tabindex', '-1'); savedCard.focus({ preventScroll: true }); }
+    }
+    pendingDraft = null;`);
+
+patch('    buildUI();\n    ensureOverlay();', `    buildUI();
+    if (integration) JSON.parse(store.get('deleted-drafts') || '[]').forEach(showDeletedDraft);
+    ensureOverlay();`);
+patch('    overlay.setAttribute("width", w);', '    if (integration) w = document.documentElement.clientWidth;\n    overlay.setAttribute("width", w);');
 // A factory prevents a stale concurrent mount from destroying a newer controller.
 patch('export { init, destroy };', 'export { init, destroy, createController };');
 const output = path.join(root, 'dist/review/vendor');
