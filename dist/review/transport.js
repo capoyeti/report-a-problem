@@ -47,6 +47,7 @@ export function createReviewTransport(config) {
     const now = cfg.now ?? Date.now;
     let stopped = false;
     let session = null;
+    let clockOffset = 0;
     let pendingSession = null;
     const controllers = new Set();
     const pageCache = new Map();
@@ -127,7 +128,7 @@ export function createReviewTransport(config) {
             throw new ReviewAccessError('stopped');
         if (pendingSession)
             return pendingSession;
-        if (!force && session && Date.parse(session.expiresAt) > now() + 30000)
+        if (!force && session && Date.parse(session.expiresAt) > now() + clockOffset + 30000)
             return session;
         pendingSession = (async () => {
             const response = await send(bootstrap.href, {
@@ -140,7 +141,13 @@ export function createReviewTransport(config) {
                 throw new ReviewAccessError('unavailable');
             let checked;
             try {
-                checked = validateSession(await response.json(), cfg, now());
+                // The same-origin gateway preserves the service Date header. Device
+                // clocks are not authoritative for grant expiry or renewal.
+                const serverTime = Date.parse(response.headers.get('date') ?? '');
+                const receivedAt = now();
+                const offset = Number.isFinite(serverTime) ? serverTime - receivedAt : 0;
+                checked = validateSession(await response.json(), cfg, now() + offset);
+                clockOffset = offset;
             }
             catch {
                 return loseAccess();

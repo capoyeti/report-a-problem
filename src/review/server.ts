@@ -71,7 +71,7 @@ export function createReviewGatewayHandlers(cfg: ReviewGatewayConfig) {
   }
   function forwardResponse(response: Response): Response {
     const headers = new Headers({ 'cache-control': 'private, no-store', vary: 'Cookie, Authorization' });
-    for (const name of ['content-type', 'etag', 'retry-after']) {
+    for (const name of ['content-type', 'etag', 'retry-after', 'date']) {
       const value = response.headers.get(name); if (value) headers.set(name, value);
     }
     return new Response(response.body, { status: response.status, headers });

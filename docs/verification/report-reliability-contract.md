@@ -1,6 +1,6 @@
 # CLEVERCONN-215 package contract
 
-Settled additive API, 8 October 2026. Source and dist build successfully. Candidate version: 0.1.4, not published or tagged. CCP may use `npm pack --pack-destination <temporary directory>` from this worktree to test the built package. Repack after later corrections. Coordinator owns review, release and adoption.
+Settled additive API, 8 October 2026. Source and dist build successfully. Historical reporting-reliability candidate at that checkpoint: 0.1.4, then not published or tagged. The combined shared-page-review candidate is now 0.2.0-rc.1. CCP may use `npm pack --pack-destination <temporary directory>` from this worktree to test the built package. Repack after later corrections. Coordinator owns review, release and adoption.
 
 ```ts
 import type {
@@ -40,3 +40,5 @@ Drafts are only in mounted memory. Explicit Close/Cancel, scope key change, logo
 Release compatibility: CCP currently pins v0.1.2 and ExpertTech v0.1.1 in the read-only main checkouts inspected. Their fixtures and direct consumer inventory need release review. Strict success intentionally rejects old mocks omitting filed or durable identity. No final dependency path, release tag or published artifact is created by this unit.
 
 Final package verification: 153 source tests, committed-dist rebuild consistency, headed React 18 smoke with inspected screenshots, and 41 tests against the final local pack in a disposable React 19 consumer pass. Coordinator independently confirmed the source/build/browser and 41-test packed consumer gates, and approved draft delivery. Actual CCP local-pack integration and release remain held. See report-reliability-package.md for exact failed harness evidence, reconciliation, final counters and case limits.
+
+For release compatibility, mocks or custom report routes in the named CCP v0.1.2 and ExpertTech v0.1.1 consumers must return `ok:true`, `filed:true`, and a nonempty `ref` or `reportId`. Review each actual consumer before upgrading; these older version references are historical, not verified current deployment pins.

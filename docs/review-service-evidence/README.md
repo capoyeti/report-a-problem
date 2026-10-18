@@ -19,7 +19,7 @@ fixture-image-only correction b42cbf4 does not change those service contracts.
 - Selecting the document button never activated its underlying action.
 - A lead saved structured expected/actual/impact details and reserved the one
   canonical report/outbox. Delivery remained off, visible as waiting for Plane.
-- Copy feedback survived an immediate 390x844 redraw and a return to1280.
+- Copy feedback survived an immediate 390x844 redraw and a return to 1280x900.
 - The lead assigned the follow-up and tester, recorded a proposed GitHub fix,
   and marked an allowlisted target/build ready for retest.
 - An older loaded build could not record a result. After a fresh checked

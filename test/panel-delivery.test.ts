@@ -55,7 +55,11 @@ describe('truthful panel delivery', () => {
     await mount(); await fill(); await send();
     expect(query('report-sent').textContent?.includes("We've emailed")).toBe(copy === true);
   });
-  it('G9/G10/U6 ambiguous retry preserves exact body, route, UUID and IDs; duplicate files once', async () => {
+  it.each(['native', 'getRandomValues fallback'])('G9/G10/U6 ambiguous retry preserves exact body, route, UUID and IDs; duplicate files once (%s)', async variant => {
+    if (variant !== 'native') {
+      const random = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+      vi.stubGlobal('crypto', { getRandomValues: random });
+    }
     let posts = 0; const bodies: string[] = []; const durable = new Map<string, string>();
     const f = vi.fn(async (url: string, init: RequestInit) => {
       if (url.includes('attachment')) return Response.json({ ok: true, attachment_id: '11111111-1111-4111-8111-111111111111', upload_url: 'https://storage.test/up' });
@@ -71,6 +75,7 @@ describe('truthful panel delivery', () => {
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Remove one.png"]')?.disabled).toBe(true);
     history.pushState({}, '', '/new-route');
     await send(); expect(bodies[1]).toBe(bodies[0]); expect(durable.size).toBe(1);
+    expect(JSON.parse(bodies[0]).submission_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     expect(JSON.parse(bodies[0]).attachment_ids).toEqual(['11111111-1111-4111-8111-111111111111']);
     expect(f.mock.calls.filter(([, init]) => init.method === 'PUT')).toHaveLength(1);
     expect(query('report-sent').textContent).toContain('REP-1');

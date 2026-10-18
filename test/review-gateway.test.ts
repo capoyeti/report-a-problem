@@ -114,3 +114,14 @@ describe('opaque thread return', () => {
     expect((await handlers.resolveReturn(req(), id)).status).toBe(403);
   });
 });
+
+describe('trusted bootstrap clock', () => {
+  it('preserves service Date without forwarding unrelated server headers', async () => {
+    const { handlers, f } = setup();
+    f.mockResolvedValue(new Response('{}', { headers: { date: 'Sun, 18 Oct 2026 20:00:00 GMT', 'x-triage-key': 'private', 'set-cookie': 'foreign=secret' } }));
+    const r = await handlers.session(req('POST', { campaignId: 'october', pagePath: '/documents', resourceId: 'record-a' }));
+    expect(r.headers.get('date')).toBe('Sun, 18 Oct 2026 20:00:00 GMT');
+    expect(r.headers.get('x-triage-key')).toBeNull(); expect(r.headers.get('set-cookie')).toBeNull();
+    expect(r.headers.get('cache-control')).toBe('private, no-store');
+  });
+});

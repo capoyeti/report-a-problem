@@ -60,6 +60,7 @@ export function createReviewTransport(config: ReviewTransportConfig) {
   const now = cfg.now ?? Date.now;
   let stopped = false;
   let session: ReviewSession | null = null;
+  let clockOffset = 0;
   let pendingSession: Promise<ReviewSession> | null = null;
   const controllers = new Set<AbortController>();
   const pageCache = new Map<string, { etag: string; data: { comments: unknown[]; complete?: unknown; nextCursor?: unknown } }>();
@@ -113,7 +114,7 @@ export function createReviewTransport(config: ReviewTransportConfig) {
   async function getSession(force = false): Promise<ReviewSession> {
     if (stopped) throw new ReviewAccessError('stopped');
     if (pendingSession) return pendingSession;
-    if (!force && session && Date.parse(session.expiresAt) > now() + 30_000) return session;
+    if (!force && session && Date.parse(session.expiresAt) > now() + clockOffset + 30_000) return session;
     pendingSession = (async () => {
       const response = await send(bootstrap.href, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-review-client-build': cfg.buildId },
@@ -122,7 +123,15 @@ export function createReviewTransport(config: ReviewTransportConfig) {
       if (response.status === 401 || response.status === 403 || response.status === 410) return loseAccess();
       if (!response.ok) throw new ReviewAccessError('unavailable');
       let checked: ReviewSession;
-      try { checked = validateSession(await response.json(), cfg, now()); }
+      try {
+        // The same-origin gateway preserves the service Date header. Device
+        // clocks are not authoritative for grant expiry or renewal.
+        const serverTime = Date.parse(response.headers.get('date') ?? '');
+        const receivedAt = now();
+        const offset = Number.isFinite(serverTime) ? serverTime - receivedAt : 0;
+        checked = validateSession(await response.json(), cfg, now() + offset);
+        clockOffset = offset;
+      }
       catch { return loseAccess(); }
       if (stopped) throw new ReviewAccessError('stopped');
       session = checked;

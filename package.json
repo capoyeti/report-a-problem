@@ -32,6 +32,7 @@
   ],
   "scripts": {
     "build": "tsc && node scripts/build-review-renderer.mjs && cp src/style.css dist/style.css",
+    "pretest": "node scripts/build-review-renderer.mjs",
     "test": "vitest run",
     "verify:panel": "npx tsx scripts/report-panel-verify.ts",
     "verify:review": "tsx scripts/review-spike-verify.ts",

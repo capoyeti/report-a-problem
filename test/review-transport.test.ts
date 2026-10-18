@@ -224,3 +224,35 @@ describe('response bodies share the request deadline', () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe('server-aligned grant clock', () => {
+  it.each([-60 * 60_000, 60 * 60_000])('uses server time for validity and renewal with device skew %s', async skew => {
+    let deviceNow = 1000 + skew;
+    const reply = (value: ReviewSession, serverNow: number) => new Response(JSON.stringify(value), {
+      headers: { 'content-type': 'application/json', date: new Date(serverNow).toUTCString() },
+    });
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(reply(session(), 1000))
+      .mockResolvedValueOnce(reply({ ...session('renewed'), expiresAt: new Date(1_171_000).toISOString() }, 571_000));
+    const t = createReviewTransport(config(f, { now: () => deviceNow }));
+    expect((await t.getSession()).token).toBe('fixture-token-1');
+    deviceNow += 569_999;
+    expect((await t.getSession()).token).toBe('fixture-token-1');
+    expect(f).toHaveBeenCalledTimes(1);
+    deviceNow += 2;
+    expect((await t.getSession()).token).toBe('renewed');
+    expect(f).toHaveBeenCalledTimes(2);
+    t.stop();
+  });
+  it.each([1000, 1000 + 60 * 60_000])('still refuses a server-expired or unbounded grant %s', async expires => {
+    const f = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...session(), expiresAt: new Date(expires).toISOString() }), {
+      headers: { 'content-type': 'application/json', date: new Date(1000).toUTCString() },
+    }));
+    const t = createReviewTransport(config(f, { now: () => -3_600_000 }));
+    await expect(t.getSession()).rejects.toMatchObject({ kind: 'access_lost' });
+  });
+  it('falls back to local validation when a test or legacy gateway has no valid Date', async () => {
+    const f = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(session()), { headers: { date: 'invalid' } }));
+    const t = createReviewTransport(config(f));
+    expect((await t.getSession()).token).toBe('fixture-token-1'); t.stop();
+  });
+});
