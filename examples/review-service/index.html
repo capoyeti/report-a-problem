@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shared review fixture</title>
+  <style>
+    * { box-sizing:border-box } body { font:16px/1.6 system-ui,sans-serif; color:#172b3a; background:#f2f6f7; margin:0 }
+    main { max-width:780px; margin:40px auto; padding:28px; background:white; border-radius:16px }
+    button { font:inherit; padding:10px 18px; min-height:44px; cursor:pointer; border:1px solid #456; background:#fff; color:#172b3a; border-radius:8px; margin:5px }
+    h1 { line-height:1.2 } .lead { color:#425b68 } .card { border:1px solid #b5c6cc; padding:20px; border-radius:12px; margin-top:24px }
+    #status { min-height:28px; font-weight:600 } @media(max-width:640px) {main {margin:12px;padding:18px}}
+  </style>
+</head>
+<body>
+<main>
+  <p class="lead">Local synthetic fixture, no school or parent data</p>
+  <h1>Parent documents</h1>
+  <p>Sign in as a fixture reviewer, then mark the document control and discuss it with another reviewer.</p>
+  <div aria-label="Fixture account">
+    <button data-actor="alice">Use Rhona fixture</button>
+    <button data-actor="chad">Use Chad fixture</button>
+    <button id="logout">Sign out</button>
+  </div>
+  <p id="status" role="status">Review is closed.</p>
+  <section class="card" data-review-id="parent-documents.fees">
+    <h2>School fees</h2><p>Open the approved fee document for the next school year.</p>
+    <button id="fee-document" data-review-id="parent-documents.fees.open">Open fee document</button>
+    <p id="document-result">The document has not been opened.</p>
+  </section>
+  <p><button id="refresh-review">Refresh shared comments</button><button id="navigate">Open another fixture page</button></p>
+</main>
+<script type="module">
+  import { createReviewAdapter } from '/dist/review/index.js';
+  let adapter;
+  const status = document.querySelector('#status');
+  document.querySelector('#fee-document').onclick = () => document.querySelector('#document-result').textContent = 'The fixture document opened.';
+  async function login(actor) {
+    adapter?.stop();
+    await fetch('/fixture/login', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({actor}) });
+    adapter = createReviewAdapter({ actorId:actor, buildId:'build-old',
+      scope:{ appId:'10000000-0000-4000-8000-000000000001', tenantId:null, environment:'test', campaignId:'30000000-0000-4000-8000-000000000001', pagePath:'/page', resourceId:null },
+      gatewayPath:'/api/review', returnPath:'/review/return', bootstrapPath:'/api/review/session',
+      onSync: s => {status.textContent = ({idle:'Shared with the review team.',pending:'Saving your comment...',loading:'Loading shared comments...',offline:'Saved on this device only.',error:'Sign in to share your draft.',conflict:'A newer comment needs your review.'})[s.state] || s.state;},
+      onAccessLost: () => {status.textContent = 'Sign in again to continue reviewing.';}
+    });
+    window.reviewFixture = adapter;
+    await adapter.mount();
+    adapter.open();
+  }
+  document.querySelectorAll('[data-actor]').forEach(button => button.onclick = () => login(button.dataset.actor).catch(() => status.textContent = 'Could not open review. Sign in and try again.'));
+  document.querySelector('#logout').onclick = async () => {
+    adapter?.stop(); status.textContent='Review is closed.';
+    try { await fetch('/fixture/logout',{method:'POST'}); } catch { /* Local teardown still completes offline. */ }
+  };
+  document.querySelector('#refresh-review').onclick = () => adapter?.refresh();
+  document.querySelector('#navigate').onclick = () => { adapter?.stop(); location.href='/other-page'; };
+</script>
+</body>
+</html>

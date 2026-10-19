@@ -110,9 +110,8 @@ person is watching the panel for a reference number. The panel mints one
 timeout resolves to the same report instead of filing a second one.
 
 Statuses the report forwarder returns: 200 with `{ ok, ref, reportId, delivered,
-duplicate, filed }`, 401 (no session), 403 (cross-origin), 413 (body over 32KB),
-429 (service rate limit), 502 (service down or erroring). The attachment
-forwarder passes the service's status and body straight through.
+duplicate, filed }`, 401 (no session), 403 (cross-origin or reporting_disabled), 503 (session availability guard failure), 413 (body over 32KB),
+429 (service rate limit), 502 (service down or erroring). Attachment failures preserve controlled 401/403/413/415/429/503 statuses; arbitrary service errors become 502. Raw service error bodies are never forwarded.
 
 ## Client wiring
 
@@ -226,6 +225,65 @@ bash scripts/smoke-tarball.sh v0.1.1
 The smoke script installs that exact tag into a throwaway consumer and resolves
 both exports. CI runs it automatically on any `v*` tag push.
 
+## Review context contract (development)
+
+The optional `@visibleprojects/report-a-problem/review-contract` entry contains
+dependency-free scope validation and actor-isolated draft keys. It is safe to
+import during server rendering. It does not enable review controls, share marks
+or grant access to a page.
+
+```ts
+import { getReviewDraftKey, parseReviewScope } from '@visibleprojects/report-a-problem/review-contract';
+
+const scope = parseReviewScope({
+  appId: 'school', tenantId: null, environment: 'test', campaignId: 'october',
+  pagePath: '/dashboard/parent-documents', resourceId: null,
+});
+if (scope) {
+  const key = getReviewDraftKey(verifiedActorId, scope);
+}
+```
+
+All scope fields are explicit. `null` is different from a tenant/resource named
+`null`. Page paths are canonical ASCII paths with no query, fragment, percent
+encoding, repeated/trailing slash or dot segment; the host maps routing context
+to this path and supplies private record identity separately. Do not use a
+display name for `verifiedActorId`. Namespace keys contain opaque context IDs,
+not tokens, and are never proof of authorisation.
+
+Contract version 1 fixtures live in `test/fixtures/review-contract-v1.json` and
+must remain identical to the service's `tests/fixtures/review-contract-v1.json`.
+The existing root import does not load review code. The optional renderer,
+server gateway and finding workflow are documented in
+[Shared page review pilot](docs/shared-page-review.md). This candidate is not a
+published review release.
+
 ## License
 
 MIT. See `LICENSE`.
+
+## Preserved reporting reliability contract
+
+The review candidate preserves the 0.1.4 reliability branch. Keep published dependency pins until the coordinator reviews and releases this candidate. Strict filing proof is a deliberate compatibility correction: update mocks or custom report routes to return `ok:true`, `filed:true` and a nonempty string `ref` or `reportId`. A service success must contain `ref` or `report_id`. Missing proof, no-op and malformed responses never show a success or promise an email. Reporter-copy wording requires `delivered.reporter_copy === true`.
+
+`verifySession` can return a `ReportProblemSessionFailure` with optional `status: 401 | 403 | 503`. Omission defaults to 401. Use 403 for an authoritative disable and 503 for an unavailable acceptance check. Thrown checks become controlled 503. Perform fresh authority checks in this consumer callback, independently of cached UI visibility.
+
+Provider and panel accept optional typed availability:
+
+```tsx
+<ReportProblemProvider
+  key={`${tenantId}:${actorId}:${profileId}`}
+  enabled={triggerVisible}
+  availability={{ canSubmit, message, onRetry: retryConnection, retrying }}
+>
+  {children}
+</ReportProblemProvider>
+```
+
+`enabled` controls trigger visibility. An open panel remains mounted when disabled, with Send blocked. Availability changes preserve text, files and position and do not cancel a dispatched POST. The host owns public status messages, freshness timers and bounded explicit recovery; the package never polls. Omitted availability remains ready for existing consumers.
+
+A failed attachment blocks Send from filing a reduced report. Retry uploads only failed files and reuses successful UUIDs, with at most three concurrent pipelines. Remove excludes a file explicitly. Signing responses must have UUID IDs, and report routes reject malformed/mixed attachment lists or lists over ten entries. `uploadAttachment` stays string/null compatible; `uploadAttachmentDetailed` returns typed, controlled outcomes.
+
+Browser signing, PUT and report requests are bounded to 15, 60 and 20 seconds respectively, including report/sign response reads. Once POST begins, an ambiguous result retains the exact body, endpoint and UUID and locks description and attachment edits. Retry sends that same report. A later definitive refusal cannot erase earlier ambiguity. Only a first-attempt definitive refusal permits edits under the same UUID. Durable duplicate proof resolves to the original reference.
+
+Drafts stay only in mounted memory. Close/Cancel, reload, logout or a provider identity key change clears them. Close after an unresolved POST explains that the report may already have been received; aborting browser work never proves server cancellation. Capture is never uploaded without explicit Include consent. No browser storage, payload logging or analytics is introduced.

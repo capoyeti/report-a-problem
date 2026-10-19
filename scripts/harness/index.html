@@ -12,9 +12,9 @@
       p { color: #52525b; line-height: 1.5; }
       .trigger { margin-top: 20px; padding: 8px 16px; font: inherit; font-size: 14px; border: 1px solid #d4d4d8; border-radius: 8px; background: #fff; cursor: pointer; }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="/vendor/react.js"></script>
+    <script src="/vendor/react-dom.js"></script>
+    <script src="/vendor/html2canvas.js"></script>
     <script type="importmap">
       {
         "imports": {
@@ -44,13 +44,32 @@
       const endpoints = { report: '/mock/report', attachment: '/mock/attachment' };
 
       function Trigger() {
-        const { open } = useReportProblem();
-        return h('button', { className: 'trigger', onClick: open, 'data-testid': 'harness-trigger' }, 'Report a problem');
+        const { open, enabled } = useReportProblem();
+        if (!enabled) return null;
+        return h('div', null,
+          h('button', { className: 'trigger', onClick: open, 'data-testid': 'harness-trigger' }, 'Report a problem'),
+          h('button', { className: 'trigger', onClick: open, 'data-testid': 'harness-collapsed' }, 'Report')
+        );
       }
 
-      createRoot(document.getElementById('root')).render(
-        h(ReportProblemProvider, { enabled: true, endpoints }, h(Trigger))
-      );
+      function Harness() {
+        const [config, setConfig] = window.React.useState({ enabled: true, availability: undefined, scope: 'tenant:actor:profile', endpoints });
+        window.rapHarness = {
+          current: window.rapHarness?.current,
+          set: (patch) => setConfig((prev) => ({ ...prev, ...patch })),
+          availability: (mode, retrying = false) => setConfig((prev) => ({ ...prev, availability: {
+            canSubmit: mode === 'ready' || mode === 'checking',
+            message: mode === 'ready' ? undefined : mode === 'checking'
+              ? "We're checking reporting availability. Your description will stay here while you retry."
+              : 'Reporting is temporarily unavailable. Your description will stay here while you retry.',
+            retrying,
+            onRetry: () => { window.rapRetries = (window.rapRetries || 0) + 1; window.rapHarness.availability('ready'); },
+          } })),
+        };
+        window.React.useEffect(() => { window.rapHarness.current = config; }, [config]);
+        return h(ReportProblemProvider, { ...config, key: config.scope }, h(Trigger));
+      }
+      createRoot(document.getElementById('root')).render(h(Harness));
     </script>
   </body>
 </html>

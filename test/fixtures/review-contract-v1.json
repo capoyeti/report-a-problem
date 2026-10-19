@@ -1,0 +1,700 @@
+{
+  "contractVersion": 1,
+  "roles": [
+    "viewer",
+    "reviewer",
+    "lead"
+  ],
+  "actions": [
+    "read",
+    "create",
+    "reply",
+    "edit_own",
+    "moderate",
+    "assign",
+    "promote",
+    "retest",
+    "manage_campaign",
+    "approve_work"
+  ],
+  "cases": [
+    {
+      "name": "app-wide",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app-a\",null,\"test\",\"october\",\"/dashboard/parent-documents\",null]"
+    },
+    {
+      "name": "private-resource",
+      "value": {
+        "appId": "app-a",
+        "tenantId": "tenant-a",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": "record-a"
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app-a\",\"tenant-a\",\"test\",\"october\",\"/dashboard/parent-documents\",\"record-a\"]"
+    },
+    {
+      "name": "literal-null",
+      "value": {
+        "appId": "app-a",
+        "tenantId": "null",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": "null"
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app-a\",\"null\",\"test\",\"october\",\"/dashboard/parent-documents\",\"null\"]"
+    },
+    {
+      "name": "root-page",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/",
+        "resourceId": null
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app-a\",null,\"test\",\"october\",\"/\",null]"
+    },
+    {
+      "name": "punctuation-in-identifier",
+      "value": {
+        "appId": "app:a|b",
+        "tenantId": "a:b|c",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app:a|b\",\"a:b|c\",\"test\",\"october\",\"/dashboard/parent-documents\",null]"
+    },
+    {
+      "name": "file-path",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/docs/policy.pdf",
+        "resourceId": null
+      },
+      "valid": true,
+      "scopeKey": "review-scope:v1:[\"app-a\",null,\"test\",\"october\",\"/docs/policy.pdf\",null]"
+    },
+    {
+      "name": "missing-appId",
+      "value": {
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-tenantId",
+      "value": {
+        "appId": "app-a",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-environment",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-campaignId",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-pagePath",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-resourceId",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents"
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-empty",
+      "value": {
+        "appId": "",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-padded",
+      "value": {
+        "appId": " app ",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-control",
+      "value": {
+        "appId": "app\u0000",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-too-long",
+      "value": {
+        "appId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-null",
+      "value": {
+        "appId": null,
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "appId-numeric",
+      "value": {
+        "appId": 3,
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-empty",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-padded",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": " app ",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-control",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "app\u0000",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-too-long",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-null",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": null,
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "campaignId-numeric",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": 3,
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-empty",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-padded",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": " app ",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-control",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "app\u0000",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-too-long",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-null",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": null,
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "environment-numeric",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": 3,
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "tenantId-empty",
+      "value": {
+        "appId": "app-a",
+        "tenantId": "",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "tenantId-control",
+      "value": {
+        "appId": "app-a",
+        "tenantId": "a\u0085b",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "tenantId-padded",
+      "value": {
+        "appId": "app-a",
+        "tenantId": " x",
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "tenantId-object",
+      "value": {
+        "appId": "app-a",
+        "tenantId": {},
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "resourceId-empty",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": ""
+      },
+      "valid": false
+    },
+    {
+      "name": "resourceId-control",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": "a\u0085b"
+      },
+      "valid": false
+    },
+    {
+      "name": "resourceId-padded",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": " x"
+      },
+      "valid": false
+    },
+    {
+      "name": "resourceId-object",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "path-relative",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "dashboard",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-full-url",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "https://app.test/a",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-protocol-relative",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "//app.test/a",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-query",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a?parent=secret",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-hash",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a#private",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-backslash",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a\\b",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-encoded",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a%2Fb",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-encoded-dot",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/%2e%2e/a",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-dot",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a/./b",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-parent",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a/../b",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-double-slash",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a//b",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-trailing-slash",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a/",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-control",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a\nb",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-space",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/a b",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-unicode",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/caf\u00e9",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "path-long",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "resourceId": null
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-scope-field",
+      "value": {
+        "appId": "app-a",
+        "tenantId": null,
+        "environment": "test",
+        "campaignId": "october",
+        "pagePath": "/dashboard/parent-documents",
+        "resourceId": null,
+        "role": "lead"
+      },
+      "valid": false
+    },
+    {
+      "name": "null-scope",
+      "value": null,
+      "valid": false
+    },
+    {
+      "name": "array-scope",
+      "value": [
+        "app-a",
+        null,
+        "test",
+        "october",
+        "/dashboard/parent-documents",
+        null
+      ],
+      "valid": false
+    }
+  ]
+}

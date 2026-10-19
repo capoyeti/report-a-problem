@@ -2,10 +2,39 @@ name: ci
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'vendor/**'
+      - 'scripts/**'
+      - 'dist/**'
+      - 'package*.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: report-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  safety:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - run: git diff --check HEAD^ HEAD
+
   build:
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

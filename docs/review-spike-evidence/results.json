@@ -1,0 +1,17 @@
+{
+  "result": "passed",
+  "checks": [
+    "two verified identities",
+    "shared create/read/reply",
+    "pin does not activate target",
+    "server-stamped authors",
+    "offline actor isolation",
+    "no token persistence",
+    "destroy removes overlay",
+    "no external requests"
+  ],
+  "comments": 1,
+  "requests": 28,
+  "pageErrors": [],
+  "physicalDeviceAcceptance": "not run"
+}

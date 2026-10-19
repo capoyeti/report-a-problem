@@ -1,0 +1,39 @@
+{
+  "result": "passed locally",
+  "environment": "synthetic loopback only; no env file loaded",
+  "browser": "153.0.8010.12",
+  "headed": true,
+  "viewports": [
+    "1440x900",
+    "1280x720",
+    "390x844",
+    "844x390",
+    "768x1024",
+    "390x420 reduced viewport"
+  ],
+  "checks": [
+    "stable selector, no target activation, original context, canonical URL, two-browser shared reply within ten seconds",
+    "discussion-scoped actions and lead options, fix-verification explanation, no Resume action after committed comment",
+    "changed DOM identity and original context; removed anchor has explanation and no guessed overlay",
+    "held conflict survives submit refresh and reload; live compare; explicit retry; immutable context",
+    "keyboard target and parent/child adjustment, Escape cleanup, private/excluded/form/editable/range capture rejected",
+    "native text-selection fallback",
+    "composing Escape is ignored; ordinary Escape closes and preserves phone composer for Resume",
+    "rejected composer preserves text and Resume; successful commit clears composer recovery",
+    "390x844 touch swipe scroll, tap and parent confirmation, 44px actions, reduced viewport, 844x390 rotation, close/resume, 5001 character rejection",
+    "same-width phone drawing survives height-only viewport changes; cross-layout fallback remains tested separately",
+    "rectangle and circle creation with immutable context",
+    "pen requires description, Escape/pointercancel cleanup, immutable pen context, cross-viewport original-description fallback",
+    "expired queue never replays; visible expiry notice",
+    "410 tombstone never reappears as a thread; refused local words survive reload until explicit discard",
+    "typed unsent reply survives reload and is isolated from another actor",
+    "Browse restores ordinary control activation on phone",
+    "decorateThread retains native replies, rerender cleanup and integration teardown"
+  ],
+  "visibilityMs": 4819,
+  "comments": 5,
+  "requests": 92,
+  "pageErrors": [],
+  "externalRequests": [],
+  "physicalDeviceAcceptance": "Not run. Real iPhone Safari, Android Chrome, tablet, software keyboard and Rhona acceptance remain required."
+}
