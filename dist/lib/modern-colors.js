@@ -28,7 +28,68 @@ export const COLOR_PROPERTIES = [
     'caretColor',
     'fill',
     'stroke',
+    // html2canvas 1.4.1 parses this for every text node, including on the
+    // elements it builds for ::before/::after. Chrome computes it from `color`,
+    // so any Tailwind text colour reaches it (CLEVERCONN-66 follow-up).
+    'webkitTextStrokeColor',
 ];
+/**
+ * Computed properties whose value can hold several colours among other tokens:
+ * gradient stops, and one colour per shadow layer. Each colour function inside
+ * the value is converted in place. Tailwind v4 puts oklab/lab colours here via
+ * `from-*`/`to-*` gradients and `ring-*` or `shadow-*` with an opacity modifier.
+ */
+export const COMPOUND_COLOR_PROPERTIES = ['backgroundImage', 'boxShadow', 'textShadow'];
+// `url(` is matched only so its contents can be skipped: a path such as
+// `/lab(1).png` must not be mistaken for a colour.
+const FUNCTION_TOKEN = /\b(?:url|oklch|oklab|lab|lch|hwb|color|color-mix)\(/gi;
+/**
+ * Replaces every modern colour function inside a compound value, such as a
+ * gradient or a multi-layer shadow, with its sRGB equivalent. Nested functions
+ * like `color-mix(in oklab, oklch(...) 50%, ...)` are converted as one unit.
+ * Returns the value unchanged when it holds no modern colour, and null when any
+ * one of them fails to convert, so the caller never writes a half-fixed value.
+ */
+export function replaceColorFunctions(value, convert) {
+    let out = '';
+    let last = 0;
+    FUNCTION_TOKEN.lastIndex = 0;
+    for (let match = FUNCTION_TOKEN.exec(value); match; match = FUNCTION_TOKEN.exec(value)) {
+        const end = closingParen(value, match.index + match[0].length - 1);
+        // Unbalanced parentheses: not a value we understand, so do not touch it.
+        if (end < 0)
+            return null;
+        FUNCTION_TOKEN.lastIndex = end + 1;
+        if (match[0].toLowerCase() === 'url(')
+            continue;
+        const rgb = convert(value.slice(match.index, end + 1));
+        if (!rgb)
+            return null;
+        out += value.slice(last, match.index) + rgb;
+        last = end + 1;
+    }
+    return last === 0 ? value : out + value.slice(last);
+}
+function closingParen(value, open) {
+    let depth = 0;
+    let quote = '';
+    for (let i = open; i < value.length; i++) {
+        const c = value[i];
+        if (quote) {
+            if (c === '\\')
+                i++;
+            else if (c === quote)
+                quote = '';
+        }
+        else if (c === '"' || c === "'")
+            quote = c;
+        else if (c === '(')
+            depth++;
+        else if (c === ')' && --depth === 0)
+            return i;
+    }
+    return -1;
+}
 /**
  * Converts any colour the browser understands into `rgb()`/`rgba()`, by painting
  * one pixel and reading the bytes back.
@@ -64,7 +125,9 @@ export function createCanvasColorConverter() {
 /**
  * Rewrites every modern colour declaration in `doc` to its sRGB equivalent and
  * returns how many were changed. Pass this html2canvas's cloned document from
- * its `onclone` hook; never the live one.
+ * its `onclone` hook; never the live one. By then html2canvas has already
+ * turned ::before/::after into real child elements, so the element walk covers
+ * pseudo-element content too.
  *
  * The converter is injected so the walk can be tested without a canvas.
  */
@@ -94,9 +157,21 @@ export function normalizeModernColors(doc, convert) {
                 changed++;
             }
         }
+        for (const property of COMPOUND_COLOR_PROPERTIES) {
+            const value = computed[property];
+            if (typeof value !== 'string' || !MODERN_COLOR_FUNCTION.test(value))
+                continue;
+            const next = replaceColorFunctions(value, convert);
+            if (next && next !== value) {
+                element.style.setProperty(cssName(property), next, 'important');
+                changed++;
+            }
+        }
     }
     return changed;
 }
 function cssName(property) {
-    return property.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    const name = property.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    // `webkitTextStrokeColor` is the CSSOM name for `-webkit-text-stroke-color`.
+    return name.startsWith('webkit-') ? `-${name}` : name;
 }
