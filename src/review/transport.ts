@@ -105,7 +105,10 @@ export function createReviewTransport(config: ReviewTransportConfig) {
       if (controller.signal.aborted) throw new DOMException('Review request timed out or was cancelled', 'AbortError');
       const bytes = new Uint8Array(size); let at = 0;
       for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
-      return new Response(bytes, { status: result.status, statusText: result.statusText, headers: result.headers });
+      // Chromium may expose an empty stream even for a null-body status.
+      // Reconstruct it with null so a successful conditional poll stays shared.
+      return new Response([204, 205, 304].includes(result.status) ? null : bytes,
+        { status: result.status, statusText: result.statusText, headers: result.headers });
     } finally {
       clearTimeout(timeout); reader?.releaseLock(); controllers.delete(controller);
       controller.signal.removeEventListener('abort', onInterrupted); init.signal?.removeEventListener('abort', abort);
