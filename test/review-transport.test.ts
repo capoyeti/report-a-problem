@@ -14,6 +14,22 @@ function config(f: typeof fetch, extra: Partial<ReviewTransportConfig> = {}): Re
 }
 
 describe('explicit authenticated review transport', () => {
+  it('keeps a cached snapshot when Chromium exposes an empty stream on a 304 response', async () => {
+    const snapshot = { comments: [{ id: 'shared-mark' }], complete: true, nextCursor: null };
+    const first = json(snapshot);
+    first.headers.set('etag', '"snapshot-1"');
+    const unchanged = new Response(null, { status: 304, headers: { etag: '"snapshot-1"' } });
+    // Actual Chromium production fetch exposed body !== null and zero bytes.
+    // Response's constructor still forbids a non-null body for status 304.
+    Object.defineProperty(unchanged, 'body', { value: new ReadableStream({ start(c) { c.close(); } }) });
+    const f = vi.fn<typeof fetch>().mockResolvedValueOnce(json(session()))
+      .mockResolvedValueOnce(first).mockResolvedValueOnce(unchanged);
+    const t = createReviewTransport(config(f));
+    expect(await (await t.request(target)).json()).toMatchObject(snapshot);
+    expect(await (await t.request(target)).json()).toMatchObject(snapshot);
+    expect(new Headers(f.mock.calls[2][1]!.headers).get('if-none-match')).toBe('"snapshot-1"');
+    t.stop();
+  });
   it('bootstraps once with no browser identity claims and current-origin cookies', async () => {
     const f = vi.fn<typeof fetch>().mockResolvedValue(json(session()));
     const t = createReviewTransport(config(f));
